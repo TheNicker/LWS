@@ -1,4 +1,5 @@
-
+#pragma once
+#include <LWS/interfaces/backends.hpp>
 namespace LWS
 {
 class Cursor 

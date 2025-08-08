@@ -24,7 +24,7 @@ public:
   virtual ~IWindowBackend() = default;
   virtual void show() = 0;
   virtual void setTitle(std::string_view) = 0;
-  virtual void setCursor(Cursor) = 0;
+  virtual void setCursor(std::shared_ptr<ICursorBackend>) = 0;
   virtual BackendId backend() const = 0;
 };
 }

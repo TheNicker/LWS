@@ -1,3 +1,4 @@
+#pragma once
 #include <LWS/interfaces/backends.hpp>
 namespace LWS
 {
@@ -9,7 +10,7 @@ public:
 
   void show();
   void setTitle(std::string_view title);
-  void setCursor(const Cursor &cursor);
+  void setCursor(Cursor* cursor);
   BackendId backendId() const;
 
 protected:

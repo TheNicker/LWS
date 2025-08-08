@@ -1,12 +1,13 @@
+#pragma once
 #include <LWS/interfaces/backends.hpp>
 namespace LWS
 {
 
-class Win32WindowBackend : public IWindowBackend {
+class WindowBackendWin32 : public IWindowBackend {
 public:
   void show() override;
   void setTitle(std::string_view title) override;
-  void setCursor(Cursor cursor) override;
+  void setCursor(std::shared_ptr<ICursorBackend> cursor) override;
   BackendId backend() const override;
   void specialFeature();
 };

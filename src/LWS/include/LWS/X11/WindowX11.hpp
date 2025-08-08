@@ -1,10 +1,11 @@
-#include <LWS/facade/Window.h>
+#pragma once
+#include <LWS/facade/Window.hpp>
 namespace LWS
 {
-class X11Window : public Window
+class WindowX11 : public Window
 {
 public:
-  X11Window();
+  WindowX11();
   void x11SpecialCall();
 };
 }
