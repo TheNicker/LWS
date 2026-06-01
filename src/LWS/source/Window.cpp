@@ -165,7 +165,7 @@ namespace LWS
 
     void Window::RemoveChild(Window* child)
     {
-        fChildren.erase(std::remove(fChildren.begin(), fChildren.end(), child), fChildren.end());
+        std::erase(fChildren, child);
     }
 
     void Window::NotifyRemovedFromRelatedWindows()

@@ -5,6 +5,7 @@
 
 #include <mutex>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 #include <LWS/Win32/CursorBackendWin32.hpp>
@@ -307,6 +308,8 @@ namespace LWS
         case WindowDisplayState::Maximized:
             ShowWindow(fHwnd, SW_MAXIMIZE);
             break;
+        default:
+            std::unreachable();
         }
     }
 
@@ -456,9 +459,9 @@ namespace LWS
 
     void WindowBackendWin32::setWindowStyles(WindowStyle styles, bool enable)
     {
-        uint32_t current_styles = static_cast<uint32_t>(fWindowStyles);
-        uint32_t requested_styles = static_cast<uint32_t>(styles);
-        fWindowStyles = static_cast<WindowStyle>(enable ? (current_styles | requested_styles) : (current_styles & ~requested_styles));
+        auto current = std::to_underlying(fWindowStyles);
+        auto requested = std::to_underlying(styles);
+        fWindowStyles = static_cast<WindowStyle>(enable ? (current | requested) : (current & ~requested));
         updateWindowStyles();
     }
 
@@ -1001,7 +1004,7 @@ namespace LWS
             static_cast<uintptr_t>(wParam),
             static_cast<uintptr_t>(lParam)
         };
-        dispatchEvent(EventRawPlatform{ static_cast<uint32_t>(BackendId::Win32), &raw_message });
+        dispatchEvent(EventRawPlatform{ std::to_underlying(BackendId::Win32), &raw_message });
 
         return use_default ? DefWindowProc(hWnd, message, wParam, lParam) : return_value;
     }
@@ -1014,10 +1017,10 @@ namespace LWS
         }
 
         LONG styles = 0;
-        uint32_t window_styles = static_cast<uint32_t>(fWindowStyles);
+        auto window_styles = std::to_underlying(fWindowStyles);
         auto has_style = [window_styles](WindowStyle style)
         {
-            return (window_styles & static_cast<uint32_t>(style)) != 0;
+            return (window_styles & std::to_underlying(style)) != 0;
         };
 
         if (has_style(WindowStyle::ChildWindow)) styles |= WS_CHILD;
@@ -1143,16 +1146,17 @@ namespace LWS
 
     void WindowBackendWin32::dispatchEvent(const AnyEvent& event_data)
     {
-        std::vector<EventCallback> callbacks;
-        callbacks.reserve(fListeners.size());
-        for (const std::pair<const EventListenerToken, EventCallback>& entry : fListeners)
+        std::vector<EventListenerToken> tokens;
+        tokens.reserve(fListeners.size());
+        for (const auto& [token, _] : fListeners)
         {
-            callbacks.push_back(entry.second);
+            tokens.push_back(token);
         }
 
-        for (const EventCallback& callback : callbacks)
+        for (EventListenerToken token : tokens)
         {
-            if (callback && callback(event_data))
+            auto it = fListeners.find(token);
+            if (it != fListeners.end() && it->second(event_data))
             {
                 break;
             }

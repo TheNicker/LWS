@@ -1,5 +1,6 @@
 #include "DragAndDropTarget.hpp"
 
+#include <string>
 #include <vector>
 
 namespace LWS::internal
@@ -114,10 +115,10 @@ namespace LWS::internal
                 continue;
             }
 
-            std::vector<wchar_t> file_path(static_cast<size_t>(char_count) + 1U, L'\0');
+            std::wstring file_path(static_cast<size_t>(char_count), L'\0');
             if (DragQueryFile(hdrop, file_index, file_path.data(), char_count + 1U) > 0)
             {
-                fCallback(std::filesystem::path(file_path.data()));
+                fCallback(std::filesystem::path(std::move(file_path)));
             }
         }
 

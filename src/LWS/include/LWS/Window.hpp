@@ -33,82 +33,82 @@ namespace LWS
         Window(Window&&) noexcept = default;
         Window& operator=(Window&&) noexcept = default;
 
-        Result Create(const WindowConfig& config = {});
+        [[nodiscard]] Result Create(const WindowConfig& config = {});
         void Destroy();
 
         void SetTitle(const LWS::string_type& title);
-        LWS::string_type GetTitle() const;
+        [[nodiscard]] LWS::string_type GetTitle() const;
 
         void SetWindowIcon(const std::filesystem::path& iconPath);
 
         void SetVisible(bool visible);
-        bool GetVisible() const;
+        [[nodiscard]] bool GetVisible() const;
         void SetDisplayState(WindowDisplayState state);
-        WindowDisplayState GetDisplayState() const;
+        [[nodiscard]] WindowDisplayState GetDisplayState() const;
 
         void SetPosition(const Point& position);
-        Point GetPosition() const;
+        [[nodiscard]] Point GetPosition() const;
         void SetSize(const Size& sz);
-        Size GetClientSize() const;
-        Rect GetClientRect() const;
-        Size GetWindowSize() const;
+        [[nodiscard]] Size GetClientSize() const;
+        [[nodiscard]] Rect GetClientRect() const;
+        [[nodiscard]] Size GetWindowSize() const;
         void SetPlacement(const WindowPlacement& placement);
-        WindowPlacement GetPlacement() const;
+        [[nodiscard]] WindowPlacement GetPlacement() const;
         void SetMinMaxSize(Size minSize, Size maxSize);
-        Size GetMinSize() const;
-        Size GetMaxSize() const;
+        [[nodiscard]] Size GetMinSize() const;
+        [[nodiscard]] Size GetMaxSize() const;
         void Move(const Point& delta);
 
         void CenterOnScreen();
         void CenterOnParent();
 
         void SetWindowStyles(WindowStyle styles, bool enable);
-        WindowStyleFlags GetWindowStyles() const;
+        [[nodiscard]] WindowStyleFlags GetWindowStyles() const;
 
         void SetForeground();
         void SetFocused();
-        bool IsInFocus() const;
+        [[nodiscard]] bool IsInFocus() const;
 
         void SetAlwaysOnTop(bool onTop);
-        bool GetAlwaysOnTop() const;
+        [[nodiscard]] bool GetAlwaysOnTop() const;
         void SetTransparent(bool transparent);
-        bool GetTransparent() const;
+        [[nodiscard]] bool GetTransparent() const;
 
         void SetBackgroundColor(LLUtils::Color color);
         void SetEraseBackground(bool erase);
-        bool GetEraseBackground() const;
+        [[nodiscard]] bool GetEraseBackground() const;
 
         void ToggleFullScreen(bool multiMonitor = false);
         void SetFullScreenState(FullScreenState state);
-        FullScreenState GetFullScreenState() const;
-        bool IsFullScreen() const;
+        [[nodiscard]] FullScreenState GetFullScreenState() const;
+        [[nodiscard]] bool IsFullScreen() const;
 
-        bool IsMouseInClientRect() const;
-        bool IsUnderMouseCursor() const;
-        Point GetMousePosition() const;
+        [[nodiscard]] bool IsMouseInClientRect() const;
+        [[nodiscard]] bool IsUnderMouseCursor() const;
+        [[nodiscard]] Point GetMousePosition() const;
         void SetDoubleClickMode(DoubleClickMode mode);
-        DoubleClickMode GetDoubleClickMode() const;
+        [[nodiscard]] DoubleClickMode GetDoubleClickMode() const;
         void SetLockMouseToWindowMode(LockMouseToWindowMode mode);
-        LockMouseToWindowMode GetLockMouseToWindowMode() const;
+        [[nodiscard]] LockMouseToWindowMode GetLockMouseToWindowMode() const;
 
         void SetMouseCursor(Cursor* cursor);
-        Cursor* GetMouseCursor() const;
+        [[nodiscard]] Cursor* GetMouseCursor() const;
 
         void SetParent(Window* parent);
-        Window* GetParent() const;
+        [[nodiscard]] Window* GetParent() const;
 
         void EnableDragAndDrop(bool enable);
 
         void SetDestroyOnClose(bool destroyOnClose);
 
-        EventListenerToken AddEventListener(EventCallback callback);
+        [[nodiscard]] EventListenerToken AddEventListener(EventCallback callback);
         void RemoveEventListener(EventListenerToken token);
-        EventListenerGuard MakeListenerGuard(EventListenerToken token);
+        [[nodiscard]] EventListenerGuard MakeListenerGuard(EventListenerToken token);
 
         void InjectRawEvent(void* platformEvent);
 
-        BackendId GetBackendId() const;
-        Handle GetHandle() const;
+        [[nodiscard]] BackendId GetBackendId() const;
+        [[nodiscard]] Handle GetHandle() const;
 
     protected:
         template<typename T>

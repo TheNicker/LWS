@@ -2,28 +2,14 @@
 #include <LWS/Platform.hpp>
 #include <LWS/Window.hpp>
 #include <LLUtils/StringDefs.h>
-
-#ifdef LWS_PLATFORM_WIN32
-#include <LWS/Win32/CursorWin32.hpp>
-#include <LWS/Win32/WindowWin32.hpp>
-#endif
+#include <LLUtils/Colors.h>
 
 int main()
 {
     using namespace LWS;
 
     Platform::init();
-
-#ifdef LWS_PLATFORM_WIN32
-    Win32::WindowWin32 win;
-    CursorWin32 cur;
-    cur.setVisible(true);
-    win.SetMenuChar(false);
-#else
     Window win;
-    Cursor cur;
-#endif
-
     WindowConfig config;
     config.title = LLUTILS_TEXT("Hello LWS");
     config.size = { 800, 600 };
@@ -33,7 +19,9 @@ int main()
     config.visible = true;
 
     win.Create(config);
-    win.SetMouseCursor(&cur);
+    win.SetWindowStyles(WindowStyle::ResizableBorder, true);
+    win.SetBackgroundColor(LLUtils::Colors::Red);
+    win.SetEraseBackground(true);
 
     Platform::runMessageLoop();
     Platform::shutdown();

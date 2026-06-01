@@ -1,6 +1,7 @@
 #include "MonitorInfo.hpp"
 
 #include <algorithm>
+#include <ranges>
 
 namespace LWS::internal
 {
@@ -100,23 +101,24 @@ namespace LWS::internal
 
     RECT MonitorInfo::getBoundingMonitorAreaInternal()
     {
-        RECT rect{};
         if (mDisplayDevices.empty())
         {
-            return rect;
+            return {};
         }
 
-        rect = mDisplayDevices.front().monitorInfo.rcMonitor;
-        for (const MonitorDesc& monitor_desc : mDisplayDevices)
-        {
-            const RECT& monitor_rect = monitor_desc.monitorInfo.rcMonitor;
-            rect.left = (std::min)(rect.left, monitor_rect.left);
-            rect.top = (std::min)(rect.top, monitor_rect.top);
-            rect.right = (std::max)(rect.right, monitor_rect.right);
-            rect.bottom = (std::max)(rect.bottom, monitor_rect.bottom);
-        }
-
-        return rect;
+        return std::ranges::fold_left(
+            mDisplayDevices | std::views::drop(1U),
+            mDisplayDevices.front().monitorInfo.rcMonitor,
+            [](RECT acc, const MonitorDesc& d) -> RECT
+            {
+                const RECT& r = d.monitorInfo.rcMonitor;
+                return {
+                    (std::min)(acc.left, r.left),
+                    (std::min)(acc.top, r.top),
+                    (std::max)(acc.right, r.right),
+                    (std::max)(acc.bottom, r.bottom)
+                };
+            });
     }
 
     BOOL CALLBACK MonitorInfo::monitorEnumProc(HMONITOR hMonitor, HDC, LPRECT, LPARAM data)
@@ -156,10 +158,10 @@ namespace LWS::internal
             desc.dpiX = static_cast<uint16_t>(dpi_x);
             desc.dpiY = static_cast<uint16_t>(dpi_y);
 
-            std::pair<MonitorMap::iterator, bool> inserted = self->mHMonitorToDesc.insert({ hMonitor, desc });
+            auto [it, _] = self->mHMonitorToDesc.insert({ hMonitor, desc });
             if ((monitor_info.dwFlags & MONITORINFOF_PRIMARY) == MONITORINFOF_PRIMARY)
             {
-                self->fPrimaryMonitorIt = inserted.first;
+                self->fPrimaryMonitorIt = it;
             }
 
             break;

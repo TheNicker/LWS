@@ -5,6 +5,9 @@
 
 #ifdef LWS_PLATFORM_WAYLAND
 
+#include <utility>
+#include <vector>
+
 namespace LWS::Wayland
 {
     WindowBackendWayland::~WindowBackendWayland()
@@ -146,10 +149,10 @@ namespace LWS::Wayland
 
     void WindowBackendWayland::setWindowStyles(WindowStyle styles, bool enable)
     {
-        if (enable)
-            fWindowStyles = static_cast<WindowStyle>(static_cast<uint32_t>(fWindowStyles) | static_cast<uint32_t>(styles));
-        else
-            fWindowStyles = static_cast<WindowStyle>(static_cast<uint32_t>(fWindowStyles) & ~static_cast<uint32_t>(styles));
+        auto current = std::to_underlying(fWindowStyles);
+        fWindowStyles = static_cast<WindowStyle>(enable
+            ? (current | std::to_underlying(styles))
+            : (current & ~std::to_underlying(styles)));
         // Wayland compositor controls window decorations; only limited style hints available
         // via the xdg-decoration protocol (prefer server-side vs client-side decorations).
     }
@@ -271,10 +274,7 @@ namespace LWS::Wayland
 
     void WindowBackendWayland::removeListener(EventListenerToken token)
     {
-        auto it = std::find_if(fListeners.begin(), fListeners.end(),
-            [token](const auto& pair) { return pair.first == token; });
-        if (it != fListeners.end())
-            fListeners.erase(it);
+        std::erase_if(fListeners, [token](const auto& pair) { return pair.first == token; });
     }
 
     void WindowBackendWayland::injectRawEvent(void*)

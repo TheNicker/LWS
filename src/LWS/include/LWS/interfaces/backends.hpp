@@ -84,7 +84,7 @@ namespace LWS
     public:
         virtual ~IWindowBackend() = default;
 
-        virtual Result create(const WindowConfig& config) = 0;
+        [[nodiscard]] virtual Result create(const WindowConfig& config) = 0;
         virtual void destroy() = 0;
         virtual void show() = 0;
         virtual void hide() = 0;
@@ -132,16 +132,16 @@ namespace LWS
         virtual void setCursor(std::shared_ptr<ICursorBackend> cursor) = 0;
         virtual void setParent(IWindowBackend* parent) = 0;
         virtual void enableDragAndDrop(bool enable) = 0;
-        virtual EventListenerToken addListener(EventCallback cb) = 0;
+        [[nodiscard]] virtual EventListenerToken addListener(EventCallback cb) = 0;
         virtual void removeListener(EventListenerToken token) = 0;
         virtual void injectRawEvent(void* platformEvent) = 0;
-        virtual Handle getHandle() const = 0;
-        virtual BackendId backend() const = 0;
+        [[nodiscard]] virtual Handle getHandle() const = 0;
+        [[nodiscard]] virtual BackendId backend() const = 0;
     };
 
     namespace internal
     {
-        std::unique_ptr<IWindowBackend> createDefaultWindowBackend();
-        std::unique_ptr<ICursorBackend> createDefaultCursorBackend();
+        [[nodiscard]] std::unique_ptr<IWindowBackend> createDefaultWindowBackend();
+        [[nodiscard]] std::unique_ptr<ICursorBackend> createDefaultCursorBackend();
     }
 }

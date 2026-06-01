@@ -39,7 +39,7 @@ namespace LWS
         EventKeyDown, EventKeyUp, EventMouseMove, EventMouseButton,
         EventMouseWheel, EventPaint, EventDragDropFile, EventRawPlatform>;
 
-    using EventCallback = std::function<bool(const AnyEvent&)>;
+    using EventCallback = std::move_only_function<bool(const AnyEvent&)>;
     using EventListenerToken = uint64_t;
 
     class Window;
@@ -49,7 +49,7 @@ namespace LWS
         EventListenerToken token = 0;
 
         EventListenerGuard() = default;
-        EventListenerGuard(Window* w, EventListenerToken t) : window(w), token(t) {}
+        [[nodiscard]] EventListenerGuard(Window* w, EventListenerToken t) : window(w), token(t) {}
         EventListenerGuard(const EventListenerGuard&) = delete;
         EventListenerGuard& operator=(const EventListenerGuard&) = delete;
         EventListenerGuard(EventListenerGuard&& other) noexcept : window(other.window), token(other.token)
