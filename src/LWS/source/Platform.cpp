@@ -371,7 +371,59 @@ namespace LWS::Platform
         }
     }
 }
+#elif defined(LWS_PLATFORM_WAYLAND)
+// ---------------------------------------------------------------------------
+// Wayland platform stubs — replace with wl_display_connect + epoll event loop
+// ---------------------------------------------------------------------------
+namespace LWS::Platform
+{
+    // TODO: store wl_display* globally after wl_display_connect(nullptr)
+    void init()
+    {
+        // TODO: wl_display_connect(nullptr) → g_wlDisplay
+        // TODO: wl_display_get_registry(g_wlDisplay) → bind wl_compositor, xdg_wm_base, etc.
+        // TODO: wl_display_roundtrip(g_wlDisplay) to receive initial registry events
+    }
+
+    void shutdown()
+    {
+        // TODO: wl_display_disconnect(g_wlDisplay)
+    }
+
+    void runMessageLoop()
+    {
+        // TODO: while (wl_display_dispatch(g_wlDisplay) != -1) {}
+    }
+
+    bool processMessages()
+    {
+        // TODO: wl_display_dispatch_pending(g_wlDisplay); wl_display_flush(g_wlDisplay)
+        return true;
+    }
+
+    bool isKeyPressed(KeyCode) { return false; }
+    bool isKeyToggled(KeyCode) { return false; }
+
+    Point getMousePosition()
+    {
+        // TODO: last pointer position from wl_pointer.motion event
+        return { 0, 0 };
+    }
+
+    void moveMouse(Point)
+    {
+        // Not supported on Wayland — pointer position is compositor-controlled.
+    }
+
+    void browseToFile(const std::filesystem::path&)
+    {
+        // TODO: xdg-desktop-portal org.freedesktop.portal.OpenURI.OpenFile
+    }
+}
 #else
+// ---------------------------------------------------------------------------
+// Null stubs for any other platform (X11 scaffold, headless builds, etc.)
+// ---------------------------------------------------------------------------
 namespace LWS::Platform
 {
     void init() {}

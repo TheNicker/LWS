@@ -16,10 +16,4 @@ namespace LWS::internal
         return std::make_unique<CursorBackendWin32>();
     }
 }
-#else
-namespace LWS::internal
-{
-    std::unique_ptr<IWindowBackend> createDefaultWindowBackend() { return nullptr; }
-    std::unique_ptr<ICursorBackend> createDefaultCursorBackend() { return nullptr; }
-}
-#endif
+#endif // LWS_PLATFORM_WIN32
