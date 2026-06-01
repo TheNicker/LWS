@@ -3,7 +3,7 @@
 namespace LWS
 {
 
-  WindowWin32::WindowWin32() :Window::Window(std::make_shared<WindowBackendWin32>())
+WindowWin32::WindowWin32() : Window::Window(std::make_shared<WindowBackendWin32>())
 {
 
 }
@@ -11,7 +11,7 @@ namespace LWS
 
 void WindowWin32::win32SpecialCall() 
 {
-auto *win32 = static_cast<WindowBackendWin32 *>(impl_.get());
-win32->specialFeature();
+    auto *win32 = static_cast<WindowBackendWin32 *>(impl_.get());
+    win32->specialFeature();
 }
 }

@@ -2,7 +2,7 @@
 #include <LWS/X11/WindowBackendX11.hpp>
 namespace LWS
 {
-WindowX11::WindowX11() :Window::Window(std::make_shared<WindowBackendX11>())
+WindowX11::WindowX11() : Window::Window(std::make_shared<WindowBackendX11>())
 {
   
 }
