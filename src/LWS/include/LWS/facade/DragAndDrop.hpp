@@ -1,7 +1,2 @@
 #pragma once
-namespace LWS
-{
-    class DragAndDrop
-    {
-    };
-}
+#include <LWS/DragAndDrop.hpp>

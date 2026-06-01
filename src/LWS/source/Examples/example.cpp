@@ -1,45 +1,42 @@
-#include <LWS/facade/Window.hpp>
-#include <LWS/facade/Cursor.hpp>
-#include <LWS/Win32/WindowWin32.hpp>
+#include <LWS/Cursor.hpp>
+#include <LWS/Platform.hpp>
+#include <LWS/Window.hpp>
+#include <LLUtils/StringDefs.h>
+
+#ifdef LWS_PLATFORM_WIN32
 #include <LWS/Win32/CursorWin32.hpp>
-#include <LWS/facade/Window.hpp>
-#include <LWS/facade/Platform.hpp>
-#include <LWS/X11/WindowX11.hpp>
+#include <LWS/Win32/WindowWin32.hpp>
+#endif
 
-//#if LWS_SUPPORTED_PLATFORM(LWS_PLATFORM_WIN32)
-// #endif
-
-int main() 
+int main()
 {
- using namespace LWS;
- WindowWin32 win;
- 
- CursorWin32 cur;
-//  Window win2 = std::move(WindowWin32());
+    using namespace LWS;
 
- win.setTitle("Hello Window");
- cur.setVisible(true);
- win.setCursor(&cur);
- 
- static_cast<WindowWin32&>(win).win32SpecialCall();
- win.show();
+    Platform::init();
 
- WindowX11 winX11;
- winX11.setTitle("My X11 Window");
+#ifdef LWS_PLATFORM_WIN32
+    Win32::WindowWin32 win;
+    CursorWin32 cur;
+    cur.setVisible(true);
+    win.SetMenuChar(false);
+#else
+    Window win;
+    Cursor cur;
+#endif
 
- using namespace LWS;
+    WindowConfig config;
+    config.title = LLUTILS_TEXT("Hello LWS");
+    config.size = { 800, 600 };
+    config.styles = WindowStyle::Caption | WindowStyle::CloseButton |
+        WindowStyle::MaximizeButton | WindowStyle::MinimizeButton |
+        WindowStyle::ResizableBorder;
+    config.visible = true;
 
- Window window = std::move(winx11);
+    win.Create(config);
+    win.SetMouseCursor(&cur);
 
- window.Create();
- window.SetWindowStyles(WindowStyle::Caption | WindowStyle::CloseButton | WindowStyle::MaximizeButton |
-                            WindowStyle::MinimizeButton | WindowStyle::ResizableBorder,
-                        true);
- window.SetVisible(true);
+    Platform::runMessageLoop();
+    Platform::shutdown();
 
-
-
- MessageLoop();
-
- return 0;
+    return 0;
 }

@@ -1,6 +1,2 @@
 #pragma once
-
-static void MessageLoop()
-{
-
-}
+#include <LWS/Platform.hpp>

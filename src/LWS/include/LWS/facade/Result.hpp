@@ -1,8 +1,2 @@
 #pragma once
-namespace LWS
-{
-    enum class Result
-    {
-        Success = 0
-    };
-}
+#include <LWS/Result.hpp>
