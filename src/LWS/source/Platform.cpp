@@ -363,7 +363,7 @@ namespace LWS::Platform
 
     void browseToFile(const std::filesystem::path& path)
     {
-        PIDLIST_ABSOLUTE item_id_list = ILCreateFromPathW(path.wstring().c_str());
+        PIDLIST_ABSOLUTE item_id_list = ILCreateFromPathW(path.c_str());
         if (item_id_list != nullptr)
         {
             SHOpenFolderAndSelectItems(item_id_list, 0, nullptr, 0);

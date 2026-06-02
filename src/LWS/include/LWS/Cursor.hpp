@@ -1,11 +1,10 @@
 #pragma once
-#include <LWS/Export.hpp>
 #include <LWS/interfaces/backends.hpp>
 #include <memory>
 
 namespace LWS
 {
-    class LWS_API Cursor
+    class Cursor
     {
     public:
         Cursor();

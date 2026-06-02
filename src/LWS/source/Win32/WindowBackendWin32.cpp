@@ -3,6 +3,9 @@
 #include <Windows.h>
 #include <WindowsX.h>
 
+#include <LLUtils/Exception.h>
+#include <LWS/StringDefs.hpp>
+
 #include <mutex>
 #include <stdexcept>
 #include <utility>
@@ -17,8 +20,8 @@
 
 namespace
 {
-    static constexpr wchar_t g_windowClassName[] = L"LWS_WINDOW_CLASS";
-    static constexpr wchar_t g_windowPropName[] = L"LWSBackend";
+    static constexpr LWS::char_type g_windowClassName[] = L"LWS_WINDOW_CLASS";
+    static constexpr LWS::char_type g_windowPropName[] = L"LWSBackend";
 
     static LWS::KeyCode keyCodeFromVirtualKey(WPARAM virtual_key, LPARAM lparam)
     {
@@ -309,7 +312,7 @@ namespace LWS
             ShowWindow(fHwnd, SW_MAXIMIZE);
             break;
         default:
-            std::unreachable();
+            LL_EXCEPTION_UNEXPECTED_VALUE;
         }
     }
 
@@ -339,7 +342,7 @@ namespace LWS
             return {};
         }
 
-        LWS::string_type title(static_cast<size_t>(title_length) + 1U, L'\0');
+        LWS::string_type title(static_cast<size_t>(title_length) + 1U, LWS::char_type{});
         GetWindowText(fHwnd, title.data(), title_length + 1);
         title.resize(static_cast<size_t>(title_length));
         return title;

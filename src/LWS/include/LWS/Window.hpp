@@ -1,6 +1,5 @@
 #pragma once
 #include <LWS/Event.hpp>
-#include <LWS/Export.hpp>
 #include <LWS/Result.hpp>
 #include <LWS/interfaces/backends.hpp>
 
@@ -21,7 +20,7 @@ namespace LWS
     class Window;
     using VecChildWindows = std::vector<Window*>;
 
-    class LWS_API Window
+    class Window
     {
     public:
         Window();
