@@ -3,6 +3,8 @@ project("LWS")
 
 set(CMAKE_CXX_STANDARD 26)
 
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/external/LLUtils")
+
 # ---------------------------------------------------------------------------
 # Platform detection
 # ---------------------------------------------------------------------------
@@ -25,8 +27,8 @@ function(lws_configure_target target)
   target_include_directories(${target} PRIVATE
       "${CMAKE_CURRENT_SOURCE_DIR}/src"
       "${CMAKE_CURRENT_SOURCE_DIR}/src/LWS/include"
-      "${CMAKE_CURRENT_SOURCE_DIR}/external/LLUtils/include"
   )
+  target_link_libraries(${target} PUBLIC LLUtils::LLUtils)
   target_compile_definitions(${target} PRIVATE NOMINMAX UNICODE _UNICODE)
 
   if(LWS_PLATFORM_WIN32)
@@ -55,6 +57,14 @@ file(GLOB_RECURSE lwsLibSources
 )
 # Exclude example from the library
 list(FILTER lwsLibSources EXCLUDE REGEX ".*Examples.*")
+if(LWS_PLATFORM_WIN32)
+  list(FILTER lwsLibSources EXCLUDE REGEX ".*/Wayland/.*")
+elseif(LWS_PLATFORM_WAYLAND)
+  list(FILTER lwsLibSources EXCLUDE REGEX ".*/Win32/.*")
+elseif(LWS_PLATFORM_X11)
+  list(FILTER lwsLibSources EXCLUDE REGEX ".*/Win32/.*")
+  list(FILTER lwsLibSources EXCLUDE REGEX ".*/Wayland/(CursorBackendWayland|WindowBackendWayland|WindowWayland)\\.cpp$")
+endif()
 
 add_library(LWSLib STATIC ${lwsLibSources})
 lws_configure_target(LWSLib)
@@ -65,7 +75,9 @@ lws_configure_target(LWSLib)
 add_executable(LWS "./src/LWS/source/Examples/example.cpp")
 target_link_libraries(LWS PRIVATE LWSLib)
 lws_configure_target(LWS)
-target_link_options(LWS PRIVATE /SUBSYSTEM:CONSOLE)
+if(MSVC)
+  target_link_options(LWS PRIVATE /SUBSYSTEM:CONSOLE)
+endif()
 
 # ---------------------------------------------------------------------------
 # Tests (Catch2 via FetchContent)
@@ -84,7 +96,9 @@ if(testSources)
   add_executable(LWSTests ${testSources})
   target_link_libraries(LWSTests PRIVATE LWSLib Catch2::Catch2WithMain)
   lws_configure_target(LWSTests)
-  target_link_options(LWSTests PRIVATE /SUBSYSTEM:CONSOLE)
+  if(MSVC)
+    target_link_options(LWSTests PRIVATE /SUBSYSTEM:CONSOLE)
+  endif()
 
   include(CTest)
   include(Catch)

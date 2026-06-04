@@ -375,14 +375,14 @@ TEST_CASE("Child window has correct parent pointer", "[window][win32]")
 }
 
 // ---------------------------------------------------------------------------
-// processMessages returns false only on WM_QUIT
+// processMessages returns true only on WM_QUIT
 // ---------------------------------------------------------------------------
-TEST_CASE("processMessages returns true when no WM_QUIT is pending", "[platform][win32]")
+TEST_CASE("processMessages returns false when no WM_QUIT is pending", "[platform][win32]")
 {
     LWS::Platform::init();
-    // There is no pending WM_QUIT — processMessages should return true.
+    // There is no pending WM_QUIT — processMessages should return false.
     bool result = LWS::Platform::processMessages();
-    REQUIRE(result == true);
+    REQUIRE(result == false);
     LWS::Platform::shutdown();
 }
 

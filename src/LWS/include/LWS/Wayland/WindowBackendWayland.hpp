@@ -1,4 +1,7 @@
 #pragma once
+#include <utility>
+#include <vector>
+
 #include <LWS/interfaces/backends.hpp>
 
 namespace LWS::Wayland
