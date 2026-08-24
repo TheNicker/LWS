@@ -15,13 +15,16 @@ int main()
     Window win;
     WindowConfig config;
     config.title = LLUTILS_TEXT("Hello LWS");
-    config.size = { 800, 600 };
-    config.styles = WindowStyle::Caption | WindowStyle::CloseButton |
-        WindowStyle::MaximizeButton | WindowStyle::MinimizeButton |
-        WindowStyle::ResizableBorder;
+    config.size = {800, 600};
+    config.styles = WindowStyle::Caption | WindowStyle::CloseButton | WindowStyle::MaximizeButton |
+                    WindowStyle::MinimizeButton | WindowStyle::ResizableBorder;
     config.visible = true;
 
-    win.Create(config);
+    if (win.Create(config) != Result::Success)
+    {
+        Platform::shutdown();
+        return 1;
+    }
     win.SetWindowStyles(WindowStyle::ResizableBorder, true);
     win.SetBackgroundColor(LLUtils::Colors::Red);
     win.SetEraseBackground(true);

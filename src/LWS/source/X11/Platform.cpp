@@ -1,8 +1,10 @@
 #ifdef LWS_PLATFORM_X11
 #include <LWS/Platform.hpp>
 
-namespace LWS::Platform
+namespace LWS::internal::platform_backend
 {
+    using Platform::Feature;
+    using Platform::MonitorDesc;
     namespace
     {
         thread_local uint32_t g_initCount = 0;
@@ -24,6 +26,8 @@ namespace LWS::Platform
     }
     void runMessageLoop() {}
     bool processMessages() { return false; }
+    void requestQuit() {}
+    bool supports(Feature) { return false; }
     bool isKeyPressed(KeyCode) { return false; }
     bool isKeyToggled(KeyCode) { return false; }
     Point getMousePosition() { return {}; }

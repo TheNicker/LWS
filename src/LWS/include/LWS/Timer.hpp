@@ -10,10 +10,9 @@ namespace LWS
 {
     class Timer
     {
-    public:
-        using Callback = std::function<void()>;
-        class Impl;
+      public:
 
+        using Callback = std::function<void()>;
         Timer();
         ~Timer();
 
@@ -27,16 +26,16 @@ namespace LWS
         void SetInterval(uint32_t interval);
         void SetCallback(Callback callback);
 
-    private:
-        std::unique_ptr<Impl> impl_;
+      private:
+
+        std::unique_ptr<ITimerBackend> impl_;
     };
 
     class HighPrecisionTimer
     {
-    public:
-        using Callback = std::function<void()>;
-        class Impl;
+      public:
 
+        using Callback = std::function<void()>;
         explicit HighPrecisionTimer(Callback callback);
         ~HighPrecisionTimer();
 
@@ -50,7 +49,8 @@ namespace LWS
         [[nodiscard]] bool GetEnabled() const;
         void Enable(bool enable);
 
-    private:
-        std::unique_ptr<Impl> impl_;
+      private:
+
+        std::unique_ptr<IHighPrecisionTimerBackend> impl_;
     };
-}
+}  // namespace LWS

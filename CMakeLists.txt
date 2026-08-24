@@ -16,12 +16,58 @@ endif()
 if(WIN32)
   set(LWS_PLATFORM_WIN32 ON)
 elseif(UNIX)
-  list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
-  # find_package(Wayland QUIET PATHS /usr/lib/cmake/Wayland)
+  list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
   find_package(Wayland QUIET)
   if(Wayland_FOUND)
-    message(STATUS "Wayland found: ${Wayland_LIBRARIES}")
+    message(STATUS "Wayland found: ${Wayland_CLIENT_LIBRARY}")
     set(LWS_PLATFORM_WAYLAND ON)
+
+    find_program(WAYLAND_SCANNER_EXECUTABLE NAMES wayland-scanner REQUIRED)
+    find_path(WAYLAND_PROTOCOLS_DIRECTORY
+        NAMES stable/xdg-shell/xdg-shell.xml
+        PATHS /usr/share/wayland-protocols
+        REQUIRED
+    )
+
+    set(LWS_WAYLAND_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/wayland")
+    set(LWS_XDG_SHELL_XML "${WAYLAND_PROTOCOLS_DIRECTORY}/stable/xdg-shell/xdg-shell.xml")
+    set(LWS_XDG_SHELL_HEADER "${LWS_WAYLAND_GENERATED_DIR}/xdg-shell-client-protocol.h")
+    set(LWS_XDG_SHELL_SOURCE "${LWS_WAYLAND_GENERATED_DIR}/xdg-shell-protocol.c")
+    set(LWS_XDG_DECORATION_XML
+        "${WAYLAND_PROTOCOLS_DIRECTORY}/unstable/xdg-decoration/xdg-decoration-unstable-v1.xml")
+    set(LWS_XDG_DECORATION_HEADER "${LWS_WAYLAND_GENERATED_DIR}/xdg-decoration-client-protocol.h")
+    set(LWS_XDG_DECORATION_SOURCE "${LWS_WAYLAND_GENERATED_DIR}/xdg-decoration-protocol.c")
+
+    add_custom_command(
+        OUTPUT "${LWS_XDG_SHELL_HEADER}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${LWS_WAYLAND_GENERATED_DIR}"
+        COMMAND "${WAYLAND_SCANNER_EXECUTABLE}" client-header "${LWS_XDG_SHELL_XML}" "${LWS_XDG_SHELL_HEADER}"
+        DEPENDS "${LWS_XDG_SHELL_XML}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${LWS_XDG_SHELL_SOURCE}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${LWS_WAYLAND_GENERATED_DIR}"
+        COMMAND "${WAYLAND_SCANNER_EXECUTABLE}" private-code "${LWS_XDG_SHELL_XML}" "${LWS_XDG_SHELL_SOURCE}"
+        DEPENDS "${LWS_XDG_SHELL_XML}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${LWS_XDG_DECORATION_HEADER}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${LWS_WAYLAND_GENERATED_DIR}"
+        COMMAND "${WAYLAND_SCANNER_EXECUTABLE}" client-header "${LWS_XDG_DECORATION_XML}"
+                "${LWS_XDG_DECORATION_HEADER}"
+        DEPENDS "${LWS_XDG_DECORATION_XML}"
+        VERBATIM
+    )
+    add_custom_command(
+        OUTPUT "${LWS_XDG_DECORATION_SOURCE}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${LWS_WAYLAND_GENERATED_DIR}"
+        COMMAND "${WAYLAND_SCANNER_EXECUTABLE}" private-code "${LWS_XDG_DECORATION_XML}"
+                "${LWS_XDG_DECORATION_SOURCE}"
+        DEPENDS "${LWS_XDG_DECORATION_XML}"
+        VERBATIM
+    )
   else()
     message(WARNING "Wayland not found — falling back to X11")
     find_package(X11 REQUIRED)
@@ -77,6 +123,20 @@ elseif(LWS_PLATFORM_X11)
 endif()
 
 add_library(LWSLib STATIC ${lwsLibSources})
+if(LWS_PLATFORM_WAYLAND)
+  target_sources(LWSLib PRIVATE
+      "${LWS_XDG_SHELL_HEADER}"
+      "${LWS_XDG_SHELL_SOURCE}"
+      "${LWS_XDG_DECORATION_HEADER}"
+      "${LWS_XDG_DECORATION_SOURCE}"
+  )
+  target_include_directories(LWSLib PRIVATE "${LWS_WAYLAND_GENERATED_DIR}")
+  target_link_libraries(LWSLib PRIVATE Wayland::Client)
+  if(TARGET Wayland::Cursor)
+    target_link_libraries(LWSLib PRIVATE Wayland::Cursor)
+    target_compile_definitions(LWSLib PRIVATE LWS_HAS_WAYLAND_CURSOR)
+  endif()
+endif()
 lws_configure_target(LWSLib)
 
 # ---------------------------------------------------------------------------

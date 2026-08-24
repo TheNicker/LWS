@@ -3,14 +3,11 @@
 #include <LWS/Clipboard.hpp>
 #include <LWS/FileDialog.hpp>
 #include <LWS/NotificationIconGroup.hpp>
-#include <LWS/Timer.hpp>
 
 namespace LWS
 {
     class Bitmap::Impl {};
     class NotificationIconGroup::Impl {};
-    class Timer::Impl {};
-    class HighPrecisionTimer::Impl {};
 
     Bitmap::Bitmap(const BitmapBuffer&) {}
     Bitmap::Bitmap(const std::filesystem::path&) {}
@@ -39,18 +36,5 @@ namespace LWS
     NotificationIconGroup::IconID NotificationIconGroup::AddIconResource(uint16_t, const string_type&) { return 0; }
     Rect NotificationIconGroup::GetIconRect(IconID) const { return {}; }
 
-    Timer::Timer() = default;
-    Timer::~Timer() = default;
-    void Timer::SetTargetWindow(Handle) {}
-    uint32_t Timer::GetInterval() const { return 0; }
-    void Timer::SetInterval(uint32_t) {}
-    void Timer::SetCallback(Callback) {}
-
-    HighPrecisionTimer::HighPrecisionTimer(Callback) {}
-    HighPrecisionTimer::~HighPrecisionTimer() = default;
-    void HighPrecisionTimer::SetRepeatInterval(uint32_t) {}
-    void HighPrecisionTimer::SetDueTime(uint32_t) {}
-    bool HighPrecisionTimer::GetEnabled() const { return false; }
-    void HighPrecisionTimer::Enable(bool) {}
 }
 #endif

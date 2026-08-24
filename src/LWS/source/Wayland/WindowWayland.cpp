@@ -1,5 +1,6 @@
 // Wayland-specific WindowWayland extension methods.
 #include <LWS/Wayland/WindowWayland.hpp>
+#include <LWS/Wayland/WindowBackendWayland.hpp>
 
 #ifdef LWS_PLATFORM_WAYLAND
 
@@ -8,15 +9,16 @@ namespace LWS::Wayland
     void WindowWayland::SetAppId(const std::string& appId)
     {
         fAppId = appId;
-        // TODO: cast impl_ to WindowBackendWayland, call xdg_toplevel_set_app_id
-        //   if (auto* b = getBackendAs<WindowBackendWayland>())
-        //       b->setAppId(appId);
+        if (auto* backend = getBackendAs<WindowBackendWayland>(); backend != nullptr)
+        {
+            backend->setAppId(appId);
+        }
     }
 
     std::string WindowWayland::GetAppId() const
     {
         return fAppId;
     }
-}
+}  // namespace LWS::Wayland
 
-#endif // LWS_PLATFORM_WAYLAND
+#endif  // LWS_PLATFORM_WAYLAND

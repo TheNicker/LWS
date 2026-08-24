@@ -1,6 +1,8 @@
 #pragma once
 #include <LWS/interfaces/backends.hpp>
 
+#include <memory>
+
 namespace LWS
 {
     /// Wayland implementation of ICursorBackend.
@@ -10,8 +12,9 @@ namespace LWS
     ///   setCustomCursor()  → wl_buffer from shm pool (BitmapBuffer pixels → wl_shm)
     class CursorBackendWayland : public ICursorBackend
     {
-    public:
-        CursorBackendWayland() = default;
+      public:
+
+        CursorBackendWayland();
         ~CursorBackendWayland() override;
 
         void setVisible(bool visible) override;
@@ -19,10 +22,13 @@ namespace LWS
         void setCustomCursor(const BitmapBuffer& bmp) override;
         BackendId backend() const override { return BackendId::Wayland; }
 
-    private:
+        void apply();
+
+      private:
+
+        class NativeState;
+        std::unique_ptr<NativeState> fNativeState;
         bool fVisible = true;
         CursorShape fShape = CursorShape::Arrow;
-        void* fWlCursorTheme = nullptr;  // wl_cursor_theme*
-        void* fWlCursor = nullptr;       // wl_cursor*
     };
-}
+}  // namespace LWS

@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <span>
 
@@ -21,7 +22,14 @@ namespace LWS
     using Rect = LLUtils::RectI32;
     using Handle = uintptr_t;
 
-    enum class BackendId { Undefined, Win32, WinUI, Wayland, X11 };
+    enum class BackendId
+    {
+        Undefined,
+        Win32,
+        WinUI,
+        Wayland,
+        X11
+    };
 
     enum class WindowStyle : uint32_t
     {
@@ -34,9 +42,24 @@ namespace LWS
         ChildWindow = 1 << 5,
     };
 
-    enum class DoubleClickMode { NotSet, Default };
-    enum class LockMouseToWindowMode { NoLock, LockResize, LockMove };
-    enum class FullScreenState { None, Windowed, SingleScreen, MultiScreen };
+    enum class DoubleClickMode
+    {
+        NotSet,
+        Default
+    };
+    enum class LockMouseToWindowMode
+    {
+        NoLock,
+        LockResize,
+        LockMove
+    };
+    enum class FullScreenState
+    {
+        None,
+        Windowed,
+        SingleScreen,
+        MultiScreen
+    };
 
     struct WindowPlacement
     {
@@ -47,8 +70,8 @@ namespace LWS
 
     struct WindowConfig
     {
-        Point position = { 100, 100 };
-        Size size = { 800, 600 };
+        Point position = {100, 100};
+        Size size = {800, 600};
         LWS::string_type title;
         WindowStyle styles = WindowStyle::NoStyle;
         WindowDisplayState displayState = WindowDisplayState::Restored;
@@ -56,8 +79,8 @@ namespace LWS
         bool eraseBackground = true;
         bool alwaysOnTop = false;
         bool transparent = false;
-        Size minSize = { 0, 0 };
-        Size maxSize = { 0, 0 };
+        Size minSize = {0, 0};
+        Size maxSize = {0, 0};
     };
 
     struct BitmapBuffer
@@ -71,7 +94,8 @@ namespace LWS
 
     class ICursorBackend
     {
-    public:
+      public:
+
         virtual ~ICursorBackend() = default;
         virtual void setVisible(bool visible) = 0;
         virtual void setCursorShape(CursorShape shape) = 0;
@@ -81,7 +105,8 @@ namespace LWS
 
     class IWindowBackend
     {
-    public:
+      public:
+
         virtual ~IWindowBackend() = default;
 
         [[nodiscard]] virtual Result create(const WindowConfig& config) = 0;
@@ -139,9 +164,35 @@ namespace LWS
         [[nodiscard]] virtual BackendId backend() const = 0;
     };
 
+    class ITimerBackend
+    {
+      public:
+
+        using Callback = std::function<void()>;
+        virtual ~ITimerBackend() = default;
+        virtual void setTargetWindow(Handle windowHandle) = 0;
+        [[nodiscard]] virtual uint32_t getInterval() const = 0;
+        virtual void setInterval(uint32_t interval) = 0;
+        virtual void setCallback(Callback callback) = 0;
+    };
+
+    class IHighPrecisionTimerBackend
+    {
+      public:
+
+        virtual ~IHighPrecisionTimerBackend() = default;
+        virtual void setRepeatInterval(uint32_t repeatInterval) = 0;
+        virtual void setDueTime(uint32_t dueTime) = 0;
+        [[nodiscard]] virtual bool getEnabled() const = 0;
+        virtual void enable(bool enabled) = 0;
+    };
+
     namespace internal
     {
         [[nodiscard]] std::unique_ptr<IWindowBackend> createDefaultWindowBackend();
         [[nodiscard]] std::unique_ptr<ICursorBackend> createDefaultCursorBackend();
-    }
-}
+        [[nodiscard]] std::unique_ptr<ITimerBackend> createTimerBackend();
+        [[nodiscard]] std::unique_ptr<IHighPrecisionTimerBackend> createHighPrecisionTimerBackend(
+            ITimerBackend::Callback callback);
+    }  // namespace internal
+}  // namespace LWS

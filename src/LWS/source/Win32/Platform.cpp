@@ -192,8 +192,10 @@ namespace LWS::internal
     }
 }  // namespace LWS::internal
 
-namespace LWS::Platform
+namespace LWS::internal::platform_backend
 {
+    using Platform::Feature;
+    using Platform::MonitorDesc;
     Result init()
     {
         if (g_platformThreadState.initCount != 0)
@@ -267,6 +269,35 @@ namespace LWS::Platform
             }
         }
 
+        return false;
+    }
+
+    void requestQuit()
+    {
+        PostQuitMessage(0);
+    }
+
+    bool supports(Feature feature)
+    {
+        switch (feature)
+        {
+        case Feature::AbsoluteWindowPosition:
+        case Feature::GlobalPointerPosition:
+        case Feature::PointerWarp:
+        case Feature::ProgrammaticActivation:
+        case Feature::AlwaysOnTop:
+        case Feature::MultiMonitorFullscreen:
+        case Feature::WindowIcon:
+        case Feature::Clipboard:
+        case Feature::DragAndDrop:
+        case Feature::FileDialog:
+        case Feature::NotificationIcon:
+        case Feature::NotificationIconGeometry:
+        case Feature::ServerSideDecorations:
+            return true;
+        case Feature::PointerLock:
+            return false;
+        }
         return false;
     }
 

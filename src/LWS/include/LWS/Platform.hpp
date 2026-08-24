@@ -6,6 +6,24 @@ namespace LWS
 {
     namespace Platform
     {
+        enum class Feature
+        {
+            AbsoluteWindowPosition,
+            GlobalPointerPosition,
+            PointerWarp,
+            ProgrammaticActivation,
+            AlwaysOnTop,
+            MultiMonitorFullscreen,
+            PointerLock,
+            WindowIcon,
+            Clipboard,
+            DragAndDrop,
+            FileDialog,
+            NotificationIcon,
+            NotificationIconGeometry,
+            ServerSideDecorations,
+        };
+
         struct MonitorDesc
         {
             Handle handle = 0;
@@ -44,6 +62,9 @@ namespace LWS
 
         void runMessageLoop();
         bool processMessages();
+        void requestQuit();
+
+        [[nodiscard]] bool supports(Feature feature);
 
         bool isKeyPressed(KeyCode key);
         bool isKeyToggled(KeyCode key);

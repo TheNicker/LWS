@@ -25,8 +25,9 @@ namespace LWS
     ///   addListener()      → wl_event_queue + epoll on wl_display_get_fd()
     class WindowBackendWayland : public IWindowBackend
     {
-    public:
-        WindowBackendWayland() = default;
+      public:
+
+        WindowBackendWayland();
         ~WindowBackendWayland() override;
 
         // IWindowBackend
@@ -84,21 +85,43 @@ namespace LWS
         Handle getHandle() const override;
         BackendId backend() const override { return BackendId::Wayland; }
 
-    private:
+        void handlePointerEnter(Point position);
+        void handlePointerLeave();
+        void handlePointerMotion(Point position, Point delta);
+        void handlePointerButton(MouseButton button, bool pressed, Point position);
+        void handlePointerWheel(int32_t delta, Point position);
+        void handleKeyboardFocus(bool focused);
+        void handleKey(KeyCode key, bool pressed);
+        void setAppId(const std::string& appId);
+
+      private:
+
+        class NativeState;
+        std::unique_ptr<NativeState> fNativeState;
+        std::shared_ptr<ICursorBackend> fCursor;
+
+        bool dispatchEvent(const AnyEvent& event);
+        void paintBackground();
+        [[nodiscard]] bool usesClientSideDecorations() const;
+        [[nodiscard]] bool isCloseButton(Point position) const;
+
         // Wayland surface handles (opaque void* to avoid including wayland-client.h here)
-        void* fWlSurface = nullptr;      // wl_surface*
-        void* fXdgSurface = nullptr;     // xdg_surface*
-        void* fXdgToplevel = nullptr;    // xdg_toplevel*
+        void* fWlSurface = nullptr;    // wl_surface*
+        void* fXdgSurface = nullptr;   // xdg_surface*
+        void* fXdgToplevel = nullptr;  // xdg_toplevel*
 
         LWS::string_type fTitle;
-        Size fSize = { 800, 600 };
-        Size fMinSize = { 0, 0 };
-        Size fMaxSize = { 0, 0 };
+        Size fSize = {800, 600};
+        Size fMinSize = {0, 0};
+        Size fMaxSize = {0, 0};
         bool fVisible = false;
         bool fAlwaysOnTop = false;
         bool fTransparent = false;
         bool fEraseBackground = true;
         bool fFullScreen = false;
+        bool fFocused = false;
+        bool fMouseInside = false;
+        Point fMousePosition{};
         LLUtils::Color fBackgroundColor;
         WindowStyle fWindowStyles = WindowStyle::NoStyle;
         WindowDisplayState fDisplayState = WindowDisplayState::Restored;
@@ -109,4 +132,4 @@ namespace LWS
         uint64_t fNextListenerToken = 1;
         std::vector<std::pair<EventListenerToken, EventCallback>> fListeners;
     };
-}
+}  // namespace LWS
