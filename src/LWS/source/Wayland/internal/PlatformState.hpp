@@ -107,7 +107,10 @@ namespace LWS::internal
         static void outputDescription(void* data, wl_output* output, const char* description);
 
         [[nodiscard]] Output* findOutput(wl_output* output);
+        void dispatchKeyRepeats();
         void releaseObjects();
+        void startKeyRepeat(KeyCode key);
+        void stopKeyRepeat();
         void dispatchTasks();
         void dispatchOnce(int timeoutMilliseconds);
 
@@ -123,6 +126,10 @@ namespace LWS::internal
         wl_pointer* fPointer = nullptr;
         wl_keyboard* fKeyboard = nullptr;
         int fWakeDescriptor = -1;
+        int fKeyRepeatDescriptor = -1;
+        int32_t fKeyRepeatRate = 0;
+        int32_t fKeyRepeatDelay = 0;
+        KeyCode fRepeatingKey = KeyCode::Unknown;
         std::mutex fTaskMutex;
         std::vector<std::move_only_function<void()>> fTasks;
         WindowBackendWayland* fPointerWindow = nullptr;

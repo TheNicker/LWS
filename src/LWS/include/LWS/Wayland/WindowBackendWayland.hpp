@@ -91,7 +91,7 @@ namespace LWS
         void handlePointerButton(MouseButton button, bool pressed, Point position);
         void handlePointerWheel(int32_t delta, Point position);
         void handleKeyboardFocus(bool focused);
-        void handleKey(KeyCode key, bool pressed);
+        void handleKey(KeyCode key, bool pressed, bool repeat = false);
         void setAppId(const std::string& appId);
 
       private:

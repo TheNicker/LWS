@@ -63,7 +63,10 @@ namespace LWS
             auto& state = *static_cast<NativeState*>(data);
             xdg_surface_ack_configure(surface, serial);
             state.configured = true;
-            state.owner.paintBackground();
+            if (state.owner.fEraseBackground)
+                state.owner.paintBackground();
+            else
+                state.owner.dispatchEvent(EventPaint{});
         }
 
         static void toplevelConfigure(void* data, xdg_toplevel*, int32_t width, int32_t height, wl_array* states)
@@ -634,11 +637,11 @@ namespace LWS
         }
     }
 
-    void WindowBackendWayland::handleKey(KeyCode key, bool pressed)
+    void WindowBackendWayland::handleKey(KeyCode key, bool pressed, bool repeat)
     {
         if (key != KeyCode::Unknown)
         {
-            dispatchEvent(pressed ? AnyEvent{EventKeyDown{key}} : AnyEvent{EventKeyUp{key}});
+            dispatchEvent(pressed ? AnyEvent{EventKeyDown{key, repeat}} : AnyEvent{EventKeyUp{key}});
         }
     }
 

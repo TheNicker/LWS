@@ -1,6 +1,22 @@
 #ifdef LWS_PLATFORM_WAYLAND
     #include <LWS/Platform.hpp>
+    #include <LWS/Wayland/PlatformWayland.hpp>
     #include "internal/PlatformState.hpp"
+
+    #include <utility>
+
+namespace LWS::Wayland
+{
+    wl_display* GetDisplay()
+    {
+        return internal::WaylandPlatformState::current().display();
+    }
+
+    void PostTask(std::move_only_function<void()> task)
+    {
+        internal::WaylandPlatformState::current().postTask(std::move(task));
+    }
+}  // namespace LWS::Wayland
 
 namespace LWS::internal::platform_backend
 {

@@ -2,138 +2,22 @@
 
     #include "PlatformState.hpp"
 
+    #include "KeyCodeLinux.hpp"
+
     #include <LWS/Wayland/WindowBackendWayland.hpp>
 
     #include <algorithm>
     #include <cerrno>
     #include <cstring>
-    #include <linux/input-event-codes.h>
     #include <poll.h>
     #include <ranges>
     #include <sys/eventfd.h>
+    #include <sys/timerfd.h>
     #include <tuple>
     #include <unistd.h>
 
 namespace
 {
-    LWS::KeyCode keyCodeFromLinux(uint32_t key)
-    {
-        using LWS::KeyCode;
-        if (key >= KEY_A && key <= KEY_Z)
-        {
-            return static_cast<KeyCode>(std::to_underlying(KeyCode::A) + key - KEY_A);
-        }
-        if (key >= KEY_1 && key <= KEY_9)
-        {
-            return static_cast<KeyCode>(std::to_underlying(KeyCode::Digit1) + key - KEY_1);
-        }
-        if (key >= KEY_F1 && key <= KEY_F12)
-        {
-            return static_cast<KeyCode>(std::to_underlying(KeyCode::F1) + key - KEY_F1);
-        }
-        if (key >= KEY_KP0 && key <= KEY_KP9)
-        {
-            return static_cast<KeyCode>(std::to_underlying(KeyCode::Numpad0) + key - KEY_KP0);
-        }
-
-        switch (key)
-        {
-            case KEY_0:
-                return KeyCode::Digit0;
-            case KEY_LEFT:
-                return KeyCode::Left;
-            case KEY_RIGHT:
-                return KeyCode::Right;
-            case KEY_UP:
-                return KeyCode::Up;
-            case KEY_DOWN:
-                return KeyCode::Down;
-            case KEY_HOME:
-                return KeyCode::Home;
-            case KEY_END:
-                return KeyCode::End;
-            case KEY_PAGEUP:
-                return KeyCode::PageUp;
-            case KEY_PAGEDOWN:
-                return KeyCode::PageDown;
-            case KEY_INSERT:
-                return KeyCode::Insert;
-            case KEY_DELETE:
-                return KeyCode::Delete;
-            case KEY_ENTER:
-                return KeyCode::Enter;
-            case KEY_ESC:
-                return KeyCode::Escape;
-            case KEY_TAB:
-                return KeyCode::Tab;
-            case KEY_BACKSPACE:
-                return KeyCode::Backspace;
-            case KEY_SPACE:
-                return KeyCode::Space;
-            case KEY_LEFTSHIFT:
-                return KeyCode::LShift;
-            case KEY_RIGHTSHIFT:
-                return KeyCode::RShift;
-            case KEY_LEFTCTRL:
-                return KeyCode::LControl;
-            case KEY_RIGHTCTRL:
-                return KeyCode::RControl;
-            case KEY_LEFTALT:
-                return KeyCode::LAlt;
-            case KEY_RIGHTALT:
-                return KeyCode::RAlt;
-            case KEY_LEFTMETA:
-            case KEY_RIGHTMETA:
-                return KeyCode::Win;
-            case KEY_CAPSLOCK:
-                return KeyCode::CapsLock;
-            case KEY_NUMLOCK:
-                return KeyCode::NumLock;
-            case KEY_SCROLLLOCK:
-                return KeyCode::ScrollLock;
-            case KEY_KPPLUS:
-                return KeyCode::NumpadAdd;
-            case KEY_KPMINUS:
-                return KeyCode::NumpadSubtract;
-            case KEY_KPASTERISK:
-                return KeyCode::NumpadMultiply;
-            case KEY_KPSLASH:
-                return KeyCode::NumpadDivide;
-            case KEY_KPDOT:
-                return KeyCode::NumpadDecimal;
-            case KEY_KPENTER:
-                return KeyCode::NumpadEnter;
-            case KEY_COMMA:
-                return KeyCode::Comma;
-            case KEY_DOT:
-                return KeyCode::Period;
-            case KEY_SLASH:
-                return KeyCode::Slash;
-            case KEY_SEMICOLON:
-                return KeyCode::Semicolon;
-            case KEY_APOSTROPHE:
-                return KeyCode::Quote;
-            case KEY_LEFTBRACE:
-                return KeyCode::LeftBracket;
-            case KEY_RIGHTBRACE:
-                return KeyCode::RightBracket;
-            case KEY_BACKSLASH:
-                return KeyCode::Backslash;
-            case KEY_MINUS:
-                return KeyCode::Minus;
-            case KEY_EQUAL:
-                return KeyCode::Equals;
-            case KEY_GRAVE:
-                return KeyCode::Tilde;
-            case KEY_SYSRQ:
-                return KeyCode::PrintScreen;
-            case KEY_PAUSE:
-                return KeyCode::Pause;
-            default:
-                return KeyCode::Unknown;
-        }
-    }
-
     LWS::MouseButton mouseButtonFromLinux(uint32_t button)
     {
         using LWS::MouseButton;
@@ -153,13 +37,22 @@ namespace
                 return MouseButton::Left;
         }
     }
+
+    bool isRepeatableKey(LWS::KeyCode key)
+    {
+        using LWS::KeyCode;
+        return key != KeyCode::Unknown && key != KeyCode::Shift && key != KeyCode::Control && key != KeyCode::Alt &&
+               key != KeyCode::Win && key != KeyCode::LShift && key != KeyCode::RShift && key != KeyCode::LControl &&
+               key != KeyCode::RControl && key != KeyCode::LAlt && key != KeyCode::RAlt && key != KeyCode::CapsLock &&
+               key != KeyCode::NumLock && key != KeyCode::ScrollLock;
+    }
 }  // namespace
 
 namespace LWS::internal
 {
     WaylandPlatformState& WaylandPlatformState::current()
     {
-        thread_local WaylandPlatformState state;
+        static WaylandPlatformState state;
         return state;
     }
 
@@ -183,6 +76,7 @@ namespace LWS::internal
             releaseObjects();
             return Result::Failure;
         }
+        fKeyRepeatDescriptor = timerfd_create(CLOCK_MONOTONIC, TFD_CLOEXEC | TFD_NONBLOCK);
 
         fRegistry = wl_display_get_registry(fDisplay);
         static constexpr wl_registry_listener registryListener{
@@ -463,6 +357,7 @@ namespace LWS::internal
             state.fKeyboard = nullptr;
             state.fKeyboardWindow = nullptr;
             state.fPressedKeys.clear();
+            state.stopKeyRepeat();
         }
     }
 
@@ -562,6 +457,7 @@ namespace LWS::internal
             state.fKeyboardWindow = nullptr;
         }
         state.fPressedKeys.clear();
+        state.stopKeyRepeat();
     }
 
     void WaylandPlatformState::keyboardKey(void* data, wl_keyboard*, uint32_t, uint32_t, uint32_t key,
@@ -585,12 +481,23 @@ namespace LWS::internal
         {
             state.fKeyboardWindow->handleKey(translated, pressed);
         }
+        if (pressed && isRepeatableKey(translated))
+            state.startKeyRepeat(translated);
+        else if (translated == state.fRepeatingKey)
+            state.stopKeyRepeat();
     }
 
     void WaylandPlatformState::keyboardModifiers(void*, wl_keyboard*, uint32_t, uint32_t, uint32_t, uint32_t, uint32_t)
     {
     }
-    void WaylandPlatformState::keyboardRepeatInfo(void*, wl_keyboard*, int32_t, int32_t) {}
+    void WaylandPlatformState::keyboardRepeatInfo(void* data, wl_keyboard*, int32_t rate, int32_t delay)
+    {
+        auto& state = *static_cast<WaylandPlatformState*>(data);
+        state.fKeyRepeatRate = rate;
+        state.fKeyRepeatDelay = delay;
+        if (rate <= 0)
+            state.stopKeyRepeat();
+    }
 
     WaylandPlatformState::Output* WaylandPlatformState::findOutput(wl_output* output)
     {
@@ -663,6 +570,45 @@ namespace LWS::internal
         }
     }
 
+    void WaylandPlatformState::startKeyRepeat(KeyCode key)
+    {
+        stopKeyRepeat();
+        if (fKeyRepeatDescriptor < 0 || fKeyRepeatRate <= 0 || fKeyRepeatDelay < 0 || !isRepeatableKey(key))
+            return;
+
+        constexpr int64_t nanosecondsPerSecond = 1'000'000'000;
+        constexpr int64_t nanosecondsPerMillisecond = 1'000'000;
+        const int64_t interval = nanosecondsPerSecond / fKeyRepeatRate;
+        const itimerspec timer{
+            .it_interval = {.tv_sec = interval / nanosecondsPerSecond, .tv_nsec = interval % nanosecondsPerSecond},
+            .it_value = {.tv_sec = fKeyRepeatDelay / 1000,
+                         .tv_nsec = static_cast<int64_t>(fKeyRepeatDelay % 1000) * nanosecondsPerMillisecond},
+        };
+        if (timerfd_settime(fKeyRepeatDescriptor, 0, &timer, nullptr) == 0)
+            fRepeatingKey = key;
+    }
+
+    void WaylandPlatformState::stopKeyRepeat()
+    {
+        fRepeatingKey = KeyCode::Unknown;
+        if (fKeyRepeatDescriptor >= 0)
+        {
+            const itimerspec timer{};
+            std::ignore = timerfd_settime(fKeyRepeatDescriptor, 0, &timer, nullptr);
+        }
+    }
+
+    void WaylandPlatformState::dispatchKeyRepeats()
+    {
+        uint64_t expirations{};
+        if (fKeyRepeatDescriptor >= 0 && read(fKeyRepeatDescriptor, &expirations, sizeof(expirations)) > 0 &&
+            fKeyboardWindow != nullptr && fPressedKeys.contains(fRepeatingKey))
+        {
+            for (uint64_t index = 0; index < expirations; ++index)
+                fKeyboardWindow->handleKey(fRepeatingKey, true, true);
+        }
+    }
+
     void WaylandPlatformState::dispatchOnce(int timeoutMilliseconds)
     {
         if (fDisplay == nullptr)
@@ -686,6 +632,7 @@ namespace LWS::internal
         pollfd descriptors[]{
             {.fd = wl_display_get_fd(fDisplay), .events = POLLIN, .revents = 0},
             {.fd = fWakeDescriptor, .events = POLLIN, .revents = 0},
+            {.fd = fKeyRepeatDescriptor, .events = POLLIN, .revents = 0},
         };
         const int pollResult = poll(descriptors, std::size(descriptors), timeoutMilliseconds);
         if (pollResult > 0 && (descriptors[0].revents & POLLIN) != 0)
@@ -712,6 +659,9 @@ namespace LWS::internal
         {
             fQuitRequested = true;
         }
+
+        if (pollResult > 0 && (descriptors[2].revents & POLLIN) != 0)
+            dispatchKeyRepeats();
 
         if (!fQuitRequested && wl_display_dispatch_pending(fDisplay) < 0)
         {
@@ -748,6 +698,8 @@ namespace LWS::internal
             wl_display_disconnect(fDisplay);
         if (fWakeDescriptor >= 0)
             close(fWakeDescriptor);
+        if (fKeyRepeatDescriptor >= 0)
+            close(fKeyRepeatDescriptor);
         fKeyboard = nullptr;
         fPointer = nullptr;
         fSeat = nullptr;
@@ -758,6 +710,10 @@ namespace LWS::internal
         fRegistry = nullptr;
         fDisplay = nullptr;
         fWakeDescriptor = -1;
+        fKeyRepeatDescriptor = -1;
+        fKeyRepeatRate = 0;
+        fKeyRepeatDelay = 0;
+        fRepeatingKey = KeyCode::Unknown;
         {
             const std::scoped_lock lock(fTaskMutex);
             fTasks.clear();
