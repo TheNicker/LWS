@@ -1,10 +1,12 @@
 #pragma once
 #include <LWS/interfaces/backends.hpp>
 
-#include <memory>
+#include <unordered_set>
 
 namespace LWS
 {
+    class WindowBackendWayland;
+
     /// Wayland implementation of ICursorBackend.
     /// Protocol mapping:
     ///   setVisible()       → wl_pointer.set_cursor(null) to hide; restore named cursor to show
@@ -22,12 +24,15 @@ namespace LWS
         void setCustomCursor(const BitmapBuffer& bmp) override;
         BackendId backend() const override { return BackendId::Wayland; }
 
-        void apply();
-
       private:
 
-        class NativeState;
-        std::unique_ptr<NativeState> fNativeState;
+        friend class WindowBackendWayland;
+
+        void attach(WindowBackendWayland& owner);
+        void detach(WindowBackendWayland& owner);
+        void apply();
+
+        std::unordered_set<WindowBackendWayland*> fOwners;
         bool fVisible = true;
         CursorShape fShape = CursorShape::Arrow;
     };

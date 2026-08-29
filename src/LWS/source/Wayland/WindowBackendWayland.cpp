@@ -4,23 +4,24 @@
 #ifdef LWS_PLATFORM_WAYLAND
 
     #include "internal/PlatformState.hpp"
+    #include "internal/CaptionRenderer.hpp"
+    #include "internal/WindowFrame.hpp"
 
     #include <algorithm>
     #include <cerrno>
     #include <cstdint>
     #include <limits>
+    #include <optional>
     #include <sys/mman.h>
     #include <sys/syscall.h>
     #include <unistd.h>
+    #include <vector>
 
     #include <wayland-client.h>
     #include <xdg-shell-client-protocol.h>
 
 namespace
 {
-    constexpr int32_t captionHeight = 32;
-    constexpr int32_t closeButtonWidth = 46;
-
     int createAnonymousFile()
     {
     #ifdef SYS_memfd_create
@@ -37,6 +38,37 @@ namespace LWS
     class WindowBackendWayland::NativeState
     {
       public:
+
+        struct CaptionBuffer
+        {
+            explicit CaptionBuffer(NativeState& state) : owner(state) {}
+
+            ~CaptionBuffer()
+            {
+                if (buffer != nullptr)
+                    wl_buffer_destroy(buffer);
+                if (mapping != MAP_FAILED)
+                    munmap(mapping, mappingSize);
+            }
+
+            static void released(void* data, wl_buffer*)
+            {
+                auto* captionBuffer = static_cast<CaptionBuffer*>(data);
+                captionBuffer->owner.releaseCaptionBuffer(captionBuffer);
+            }
+
+            NativeState& owner;
+            wl_buffer* buffer = nullptr;
+            void* mapping = MAP_FAILED;
+            size_t mappingSize = 0;
+        };
+
+        struct ToplevelConfigure
+        {
+            Size size{};
+            bool maximized = false;
+            bool fullscreen = false;
+        };
 
         explicit NativeState(WindowBackendWayland& window) : owner(window) {}
 
@@ -58,27 +90,33 @@ namespace LWS
             bufferReleased = true;
         }
 
+        void releaseCaptionBuffer(CaptionBuffer* releasedBuffer)
+        {
+            std::erase_if(captionBuffers,
+                          [releasedBuffer](const auto& buffer) { return buffer.get() == releasedBuffer; });
+        }
+
         static void surfaceConfigure(void* data, xdg_surface* surface, uint32_t serial)
         {
             auto& state = *static_cast<NativeState*>(data);
             xdg_surface_ack_configure(surface, serial);
             state.configured = true;
+            if (state.pendingToplevelConfigure.has_value())
+            {
+                const ToplevelConfigure configure = *state.pendingToplevelConfigure;
+                state.pendingToplevelConfigure.reset();
+                state.owner.handleToplevelConfigure(configure.size, configure.maximized, configure.fullscreen);
+            }
             if (state.owner.fEraseBackground)
                 state.owner.paintBackground();
             else
                 state.owner.dispatchEvent(EventPaint{});
+            state.owner.paintCaption();
         }
 
         static void toplevelConfigure(void* data, xdg_toplevel*, int32_t width, int32_t height, wl_array* states)
         {
             auto& state = *static_cast<NativeState*>(data);
-            auto& owner = state.owner;
-            const Size previousSize = owner.fSize;
-            if (width > 0 && height > 0)
-            {
-                owner.fSize = {width, height - (owner.usesClientSideDecorations() ? captionHeight : 0)};
-                owner.fSize.y = std::max(owner.fSize.y, 1);
-            }
 
             bool maximized = false;
             bool fullscreen = false;
@@ -89,28 +127,11 @@ namespace LWS
                 maximized |= *item == XDG_TOPLEVEL_STATE_MAXIMIZED;
                 fullscreen |= *item == XDG_TOPLEVEL_STATE_FULLSCREEN;
             }
-
-            const WindowDisplayState displayState = maximized ? WindowDisplayState::Maximized
-                                                              : WindowDisplayState::Restored;
-            if (displayState != owner.fDisplayState)
-            {
-                owner.fDisplayState = displayState;
-                owner.dispatchEvent(EventDisplayStateChanged{displayState});
-            }
-            owner.fFullScreen = fullscreen;
-            if (fullscreen)
-            {
-                owner.fFullScreenState = FullScreenState::SingleScreen;
-            }
-            else if (owner.fFullScreenState != FullScreenState::None)
-            {
-                owner.fFullScreenState = FullScreenState::Windowed;
-            }
-
-            if (owner.fSize != previousSize)
-            {
-                owner.dispatchEvent(EventResize{owner.fSize});
-            }
+            state.pendingToplevelConfigure = ToplevelConfigure{
+                .size = {width, height},
+                .maximized = maximized,
+                .fullscreen = fullscreen,
+            };
         }
 
         static void toplevelClose(void* data, xdg_toplevel*)
@@ -124,7 +145,16 @@ namespace LWS
 
         static void toplevelConfigureBounds(void*, xdg_toplevel*, int32_t, int32_t) {}
         static void toplevelWmCapabilities(void*, xdg_toplevel*, wl_array*) {}
-        static void decorationConfigure(void*, zxdg_toplevel_decoration_v1*, uint32_t) {}
+        static void decorationConfigure(void* data, zxdg_toplevel_decoration_v1*, uint32_t mode)
+        {
+            auto& state = *static_cast<NativeState*>(data);
+            state.decorationMode = mode == ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE
+                                       ? internal::WaylandDecorationMode::ServerSide
+                                       : internal::WaylandDecorationMode::ClientSide;
+            state.owner.updateWindowGeometry();
+            state.owner.paintBackground();
+            state.owner.paintCaption();
+        }
 
         static void bufferRelease(void* data, wl_buffer*)
         {
@@ -141,13 +171,21 @@ namespace LWS
         wl_surface* surface = nullptr;
         xdg_surface* shellSurface = nullptr;
         xdg_toplevel* toplevel = nullptr;
+        wl_subsurface* subsurface = nullptr;
+        wl_surface* captionSurface = nullptr;
+        wl_subsurface* captionSubsurface = nullptr;
         zxdg_toplevel_decoration_v1* decoration = nullptr;
+        internal::WaylandDecorationMode decorationMode = internal::WaylandDecorationMode::None;
         wl_buffer* buffer = nullptr;
         void* mapping = MAP_FAILED;
         size_t mappingSize = 0;
         bool configured = false;
         bool bufferReleased = true;
         bool repaintPending = false;
+        std::optional<ToplevelConfigure> pendingToplevelConfigure;
+        std::vector<std::unique_ptr<CaptionBuffer>> captionBuffers;
+        std::optional<CursorShape> frameCursorShape;
+        int32_t captionWidth = 0;
     };
 
     WindowBackendWayland::WindowBackendWayland() = default;
@@ -155,6 +193,8 @@ namespace LWS
     WindowBackendWayland::~WindowBackendWayland()
     {
         destroy();
+        if (auto* cursor = dynamic_cast<CursorBackendWayland*>(fCursor.get()); cursor != nullptr)
+            cursor->detach(*this);
     }
 
     Result WindowBackendWayland::create(const WindowConfig& config)
@@ -171,6 +211,8 @@ namespace LWS
         }
 
         fTitle = config.title;
+        fWindowStyles = config.styles;
+        fPosition = config.position;
         fSize = config.size;
         fMinSize = config.minSize;
         fMaxSize = config.maxSize;
@@ -178,7 +220,6 @@ namespace LWS
         fAlwaysOnTop = config.alwaysOnTop;
         fTransparent = config.transparent;
         fEraseBackground = config.eraseBackground;
-        fWindowStyles = config.styles;
         fDisplayState = config.displayState;
 
         auto native = std::make_unique<NativeState>(*this);
@@ -188,39 +229,86 @@ namespace LWS
             return Result::Failure;
         }
 
-        native->shellSurface = xdg_wm_base_get_xdg_surface(platform.shell(), native->surface);
-        native->toplevel = native->shellSurface != nullptr ? xdg_surface_get_toplevel(native->shellSurface) : nullptr;
-        if (native->shellSurface == nullptr || native->toplevel == nullptr)
+        if (isChildWindow())
         {
-            if (native->toplevel != nullptr)
-                xdg_toplevel_destroy(native->toplevel);
-            if (native->shellSurface != nullptr)
-                xdg_surface_destroy(native->shellSurface);
-            wl_surface_destroy(native->surface);
-            native->surface = nullptr;
-            return Result::Failure;
+            if (platform.subcompositor() == nullptr || fParentBackend == nullptr ||
+                fParentBackend->fNativeState == nullptr)
+            {
+                wl_surface_destroy(native->surface);
+                return platform.subcompositor() == nullptr ? Result::NotSupported : Result::InvalidState;
+            }
+            native->subsurface = wl_subcompositor_get_subsurface(platform.subcompositor(), native->surface,
+                                                                 fParentBackend->fNativeState->surface);
+            if (native->subsurface == nullptr)
+            {
+                wl_surface_destroy(native->surface);
+                return Result::Failure;
+            }
+            wl_subsurface_set_desync(native->subsurface);
+            native->configured = true;
         }
+        else
+        {
+            native->shellSurface = xdg_wm_base_get_xdg_surface(platform.shell(), native->surface);
+            native->toplevel = native->shellSurface != nullptr ? xdg_surface_get_toplevel(native->shellSurface)
+                                                               : nullptr;
+            if (native->shellSurface == nullptr || native->toplevel == nullptr)
+            {
+                if (native->toplevel != nullptr)
+                    xdg_toplevel_destroy(native->toplevel);
+                if (native->shellSurface != nullptr)
+                    xdg_surface_destroy(native->shellSurface);
+                wl_surface_destroy(native->surface);
+                return Result::Failure;
+            }
 
-        static constexpr xdg_surface_listener surfaceListener{.configure = NativeState::surfaceConfigure};
-        static constexpr xdg_toplevel_listener toplevelListener{
-            .configure = NativeState::toplevelConfigure,
-            .close = NativeState::toplevelClose,
-            .configure_bounds = NativeState::toplevelConfigureBounds,
-            .wm_capabilities = NativeState::toplevelWmCapabilities,
-        };
-        xdg_surface_add_listener(native->shellSurface, &surfaceListener, native.get());
-        xdg_toplevel_add_listener(native->toplevel, &toplevelListener, native.get());
+            if (captionMode() == internal::WaylandCaptionMode::Detached)
+            {
+                native->captionSurface = wl_compositor_create_surface(platform.compositor());
+                native->captionSubsurface = native->captionSurface != nullptr
+                                                ? wl_subcompositor_get_subsurface(platform.subcompositor(),
+                                                                                  native->captionSurface,
+                                                                                  native->surface)
+                                                : nullptr;
+                if (native->captionSurface == nullptr || native->captionSubsurface == nullptr)
+                {
+                    if (native->captionSubsurface != nullptr)
+                        wl_subsurface_destroy(native->captionSubsurface);
+                    if (native->captionSurface != nullptr)
+                        wl_surface_destroy(native->captionSurface);
+                    xdg_toplevel_destroy(native->toplevel);
+                    xdg_surface_destroy(native->shellSurface);
+                    wl_surface_destroy(native->surface);
+                    return Result::Failure;
+                }
+                wl_subsurface_set_position(native->captionSubsurface, 0, -internal::waylandCaptionHeight);
+                wl_subsurface_set_desync(native->captionSubsurface);
+            }
+
+            static constexpr xdg_surface_listener surfaceListener{.configure = NativeState::surfaceConfigure};
+            static constexpr xdg_toplevel_listener toplevelListener{
+                .configure = NativeState::toplevelConfigure,
+                .close = NativeState::toplevelClose,
+                .configure_bounds = NativeState::toplevelConfigureBounds,
+                .wm_capabilities = NativeState::toplevelWmCapabilities,
+            };
+            xdg_surface_add_listener(native->shellSurface, &surfaceListener, native.get());
+            xdg_toplevel_add_listener(native->toplevel, &toplevelListener, native.get());
+        }
 
         fWlSurface = native->surface;
         fXdgSurface = native->shellSurface;
         fXdgToplevel = native->toplevel;
         fNativeState = std::move(native);
         platform.registerWindow(static_cast<wl_surface*>(fWlSurface), *this);
+        if (fNativeState->captionSurface != nullptr)
+            platform.registerWindow(fNativeState->captionSurface, *this, internal::WaylandSurfaceRole::Caption);
 
-        if (platform.decorationManager() != nullptr)
+        if (!isChildWindow() && platform.decorationManager() != nullptr)
         {
             fNativeState->decoration = zxdg_decoration_manager_v1_get_toplevel_decoration(platform.decorationManager(),
                                                                                           fNativeState->toplevel);
+            fNativeState->decorationMode = internal::WaylandDecorationMode::Pending;
             static constexpr zxdg_toplevel_decoration_v1_listener decorationListener{
                 .configure = NativeState::decorationConfigure,
             };
@@ -228,10 +316,28 @@ namespace LWS
             setWindowStyles(WindowStyle::NoStyle, true);
         }
 
-        setTitle(fTitle);
-        setMinMaxSize(fMinSize, fMaxSize);
-        setDisplayState(fDisplayState);
-        wl_surface_commit(static_cast<wl_surface*>(fWlSurface));
+        if (isChildWindow())
+        {
+            updateSubsurfacePosition();
+            if (fVisible)
+            {
+                if (fEraseBackground)
+                    paintBackground();
+                else
+                    dispatchEvent(EventPaint{});
+            }
+            else
+            {
+                wl_surface_commit(fNativeState->surface);
+            }
+        }
+        else
+        {
+            setTitle(fTitle);
+            setMinMaxSize(fMinSize, fMaxSize);
+            setDisplayState(fDisplayState);
+            wl_surface_commit(fNativeState->surface);
+        }
         return Result::Success;
     }
 
@@ -243,12 +349,22 @@ namespace LWS
         }
 
         auto native = std::move(fNativeState);
+        if (native->captionSurface != nullptr)
+            internal::WaylandPlatformState::current().unregisterWindow(native->captionSurface);
         internal::WaylandPlatformState::current().unregisterWindow(native->surface);
         native->releaseBuffer();
         if (native->decoration != nullptr)
             zxdg_toplevel_decoration_v1_destroy(native->decoration);
-        xdg_toplevel_destroy(native->toplevel);
-        xdg_surface_destroy(native->shellSurface);
+        if (native->subsurface != nullptr)
+            wl_subsurface_destroy(native->subsurface);
+        if (native->captionSubsurface != nullptr)
+            wl_subsurface_destroy(native->captionSubsurface);
+        if (native->captionSurface != nullptr)
+            wl_surface_destroy(native->captionSurface);
+        if (native->toplevel != nullptr)
+            xdg_toplevel_destroy(native->toplevel);
+        if (native->shellSurface != nullptr)
+            xdg_surface_destroy(native->shellSurface);
         wl_surface_destroy(native->surface);
         fXdgToplevel = nullptr;
         fXdgSurface = nullptr;
@@ -262,9 +378,14 @@ namespace LWS
         if (fNativeState != nullptr && !fVisible)
         {
             fVisible = true;
+            updateWindowGeometry();
             if (fNativeState->configured)
             {
-                paintBackground();
+                if (fEraseBackground)
+                    paintBackground();
+                else
+                    dispatchEvent(EventPaint{});
+                paintCaption();
             }
             else
             {
@@ -280,7 +401,13 @@ namespace LWS
             fVisible = false;
             wl_surface_attach(fNativeState->surface, nullptr, 0, 0);
             wl_surface_commit(fNativeState->surface);
-            fNativeState->configured = false;
+            if (fNativeState->captionSurface != nullptr)
+            {
+                wl_surface_attach(fNativeState->captionSurface, nullptr, 0, 0);
+                wl_surface_commit(fNativeState->captionSurface);
+            }
+            if (!isChildWindow())
+                fNativeState->configured = false;
         }
     }
 
@@ -291,8 +418,13 @@ namespace LWS
 
     void WindowBackendWayland::setDisplayState(WindowDisplayState state)
     {
+        if (state == WindowDisplayState::Maximized && fDisplayState == WindowDisplayState::Restored && !fFullScreen &&
+            !fRestoredClientSize.has_value())
+        {
+            fRestoredClientSize = fSize;
+        }
         fDisplayState = state;
-        if (fNativeState == nullptr)
+        if (fNativeState == nullptr || fNativeState->toplevel == nullptr)
         {
             return;
         }
@@ -318,11 +450,14 @@ namespace LWS
 
     void WindowBackendWayland::setTitle(const LWS::string_type& title)
     {
+        const bool titleChanged = title != fTitle;
         fTitle = title;
-        if (fNativeState != nullptr)
+        if (fNativeState != nullptr && fNativeState->toplevel != nullptr)
         {
             xdg_toplevel_set_title(fNativeState->toplevel, fTitle.c_str());
         }
+        if (titleChanged)
+            paintCaption();
     }
 
     LWS::string_type WindowBackendWayland::getTitle() const
@@ -330,10 +465,17 @@ namespace LWS
         return fTitle;
     }
     void WindowBackendWayland::setWindowIcon(const std::filesystem::path&) {}
-    void WindowBackendWayland::setPosition(Point) {}
+    void WindowBackendWayland::setPosition(Point position)
+    {
+        if (isChildWindow())
+        {
+            fPosition = position;
+            updateSubsurfacePosition();
+        }
+    }
     Point WindowBackendWayland::getPosition() const
     {
-        return {};
+        return isChildWindow() ? fPosition : Point{};
     }
 
     void WindowBackendWayland::setSize(Size size)
@@ -341,7 +483,9 @@ namespace LWS
         if (size.x > 0 && size.y > 0 && size != fSize)
         {
             fSize = size;
+            updateWindowGeometry();
             paintBackground();
+            paintCaption();
         }
     }
 
@@ -360,20 +504,21 @@ namespace LWS
 
     void WindowBackendWayland::setPlacement(const WindowPlacement& placement)
     {
+        setPosition(placement.position);
         setSize(placement.size);
         setDisplayState(placement.displayState);
     }
 
     WindowPlacement WindowBackendWayland::getPlacement() const
     {
-        return {{}, fSize, fDisplayState};
+        return {getPosition(), fSize, fDisplayState};
     }
 
     void WindowBackendWayland::setMinMaxSize(Size minSize, Size maxSize)
     {
         fMinSize = minSize;
         fMaxSize = maxSize;
-        if (fNativeState != nullptr)
+        if (fNativeState != nullptr && fNativeState->toplevel != nullptr)
         {
             xdg_toplevel_set_min_size(fNativeState->toplevel, std::max(minSize.x, 0), std::max(minSize.y, 0));
             xdg_toplevel_set_max_size(fNativeState->toplevel, std::max(maxSize.x, 0), std::max(maxSize.y, 0));
@@ -408,6 +553,9 @@ namespace LWS
                 zxdg_toplevel_decoration_v1_unset_mode(fNativeState->decoration);
             }
         }
+        updateWindowGeometry();
+        paintBackground();
+        paintCaption();
     }
 
     WindowStyle WindowBackendWayland::getWindowStyles() const
@@ -462,15 +610,68 @@ namespace LWS
         return fEraseBackground;
     }
 
+    void WindowBackendWayland::handleToplevelConfigure(Size size, bool maximized, bool fullscreen)
+    {
+        const Size previousSize = fSize;
+        const WindowDisplayState displayState = maximized ? WindowDisplayState::Maximized
+                                                          : WindowDisplayState::Restored;
+        const bool displayStateChanged = displayState != fDisplayState;
+        const bool constrained = fullscreen || maximized;
+        if (constrained && !fFullScreen && fDisplayState == WindowDisplayState::Restored &&
+            !fRestoredClientSize.has_value())
+        {
+            fRestoredClientSize = fSize;
+        }
+        fDisplayState = displayState;
+
+        fFullScreen = fullscreen;
+        if (fullscreen)
+        {
+            fFullScreenState = FullScreenState::SingleScreen;
+        }
+        else if (fFullScreenState != FullScreenState::None)
+        {
+            fFullScreenState = FullScreenState::Windowed;
+        }
+
+        const bool hasConfiguredSize = size.x > 0 && size.y > 0;
+        if (!constrained && fRestoredClientSize.has_value() && !hasConfiguredSize)
+        {
+            // xdg-shell allows the compositor to omit restored dimensions. Keep the last windowed client size so the
+            // constrained buffer size does not become the client's fallback.
+            fSize = *fRestoredClientSize;
+        }
+        else if (hasConfiguredSize)
+        {
+            const bool captionVisible = showsClientSideDecorations() || showsDetachedCaption();
+            fSize = {size.x, size.y - (captionVisible ? internal::waylandCaptionHeight : 0)};
+            fSize.y = std::max(fSize.y, 1);
+        }
+        if (!constrained)
+            fRestoredClientSize.reset();
+
+        updateWindowGeometry();
+        if (displayStateChanged)
+            dispatchEvent(EventDisplayStateChanged{displayState});
+        if (fSize != previousSize)
+            dispatchEvent(EventResize{fSize});
+    }
+
     void WindowBackendWayland::setFullScreenState(FullScreenState state)
     {
+        const bool fullscreen = state != FullScreenState::None && state != FullScreenState::Windowed;
+        if (fullscreen && !fFullScreen && !fRestoredClientSize.has_value())
+            fRestoredClientSize = fSize;
         fFullScreenState = state;
-        fFullScreen = state != FullScreenState::None && state != FullScreenState::Windowed;
-        if (fNativeState != nullptr)
+        fFullScreen = fullscreen;
+        updateWindowGeometry();
+        if (fNativeState != nullptr && fNativeState->toplevel != nullptr)
         {
             if (fFullScreen)
             {
                 xdg_toplevel_set_fullscreen(fNativeState->toplevel, nullptr);
+                paintBackground();
+                paintCaption();
             }
             else
             {
@@ -523,21 +724,25 @@ namespace LWS
     }
     void WindowBackendWayland::setCursor(std::shared_ptr<ICursorBackend> cursor)
     {
+        if (auto* previous = dynamic_cast<CursorBackendWayland*>(fCursor.get()); previous != nullptr)
+            previous->detach(*this);
         fCursor = std::move(cursor);
-        if (auto* waylandCursor = dynamic_cast<CursorBackendWayland*>(fCursor.get()); waylandCursor != nullptr)
-        {
-            waylandCursor->apply();
-        }
+        if (auto* current = dynamic_cast<CursorBackendWayland*>(fCursor.get()); current != nullptr)
+            current->attach(*this);
+        if (fNativeState != nullptr && fNativeState->frameCursorShape.has_value())
+            internal::WaylandPlatformState::current().applyCursor(*this, *fNativeState->frameCursorShape, true);
+        else
+            applyClientCursor();
     }
 
     void WindowBackendWayland::setParent(IWindowBackend* parent)
     {
-        auto* waylandParent = dynamic_cast<WindowBackendWayland*>(parent);
-        if (fNativeState != nullptr)
+        fParentBackend = dynamic_cast<WindowBackendWayland*>(parent);
+        if (fNativeState != nullptr && fNativeState->toplevel != nullptr)
         {
             xdg_toplevel_set_parent(fNativeState->toplevel,
-                                    waylandParent != nullptr && waylandParent->fNativeState != nullptr
-                                        ? waylandParent->fNativeState->toplevel
+                                    fParentBackend != nullptr && fParentBackend->fNativeState != nullptr
+                                        ? fParentBackend->fNativeState->toplevel
                                         : nullptr);
         }
     }
@@ -569,58 +774,96 @@ namespace LWS
         return reinterpret_cast<Handle>(fWlSurface);
     }
 
-    void WindowBackendWayland::handlePointerEnter(Point position)
+    void WindowBackendWayland::handlePointerEnter(Point position, internal::WaylandSurfaceRole surfaceRole)
     {
         fMouseInside = true;
         fMousePosition = position;
-        if (auto* waylandCursor = dynamic_cast<CursorBackendWayland*>(fCursor.get()); waylandCursor != nullptr)
-        {
-            waylandCursor->apply();
-        }
+        const internal::WaylandFrameHit hit = frameHit(position, surfaceRole);
+        if (hit.action == internal::WaylandFrameAction::Client)
+            applyClientCursor();
+        else
+            applyFrameCursor(hit);
     }
 
     void WindowBackendWayland::handlePointerLeave()
     {
         fMouseInside = false;
+        if (fNativeState != nullptr)
+            fNativeState->frameCursorShape.reset();
     }
 
-    void WindowBackendWayland::handlePointerMotion(Point position, Point delta)
+    void WindowBackendWayland::handlePointerMotion(Point position, Point delta,
+                                                   internal::WaylandSurfaceRole surfaceRole)
     {
-        if (usesClientSideDecorations() && position.y < captionHeight)
-        {
-            fMousePosition = position;
+        fMousePosition = position;
+        const internal::WaylandFrameHit hit = frameHit(position, surfaceRole);
+        applyFrameCursor(hit);
+        if (hit.action != internal::WaylandFrameAction::Client)
             return;
-        }
-        if (usesClientSideDecorations())
-        {
-            position.y -= captionHeight;
-        }
+
+        position -= contentOffset();
         fMousePosition = position;
         dispatchEvent(EventMouseMove{position, delta});
     }
 
-    void WindowBackendWayland::handlePointerButton(MouseButton button, bool pressed, Point position)
+    void WindowBackendWayland::handlePointerButton(MouseButton button, bool pressed, Point position,
+                                                   internal::WaylandSurfaceRole surfaceRole, uint32_t time)
     {
-        if (usesClientSideDecorations() && button == MouseButton::Left && pressed && position.y < captionHeight)
+        const internal::WaylandFrameHit hit = frameHit(position, surfaceRole);
+        if (hit.action != internal::WaylandFrameAction::Client)
         {
-            if (isCloseButton(position))
+            if (button == MouseButton::Left && pressed)
             {
-                if (!dispatchEvent(EventClose{}))
-                    destroy();
-            }
-            else if (fNativeState != nullptr)
-            {
-                auto& platform = internal::WaylandPlatformState::current();
-                xdg_toplevel_move(fNativeState->toplevel, platform.seat(), platform.pointerSerial());
+                if (hit.action != internal::WaylandFrameAction::Move)
+                    fCaptionClickPending = false;
+                switch (hit.action)
+                {
+                    case internal::WaylandFrameAction::Close:
+                        if (!dispatchEvent(EventClose{}))
+                            destroy();
+                        break;
+                    case internal::WaylandFrameAction::Move:
+                    {
+                        if (fDoubleClickMode == DoubleClickMode::Default && isCaptionDoubleClick(time, position))
+                        {
+                            setDisplayState(fDisplayState == WindowDisplayState::Maximized
+                                                ? WindowDisplayState::Restored
+                                                : WindowDisplayState::Maximized);
+                        }
+                        else if (fNativeState != nullptr && fNativeState->toplevel != nullptr)
+                        {
+                            auto& platform = internal::WaylandPlatformState::current();
+                            xdg_toplevel_move(fNativeState->toplevel, platform.seat(), platform.pointerButtonSerial());
+                        }
+                        break;
+                    }
+                    case internal::WaylandFrameAction::Resize:
+                        std::ignore = beginResize(hit.edge);
+                        break;
+                    case internal::WaylandFrameAction::Client:
+                        break;
+                }
             }
             return;
         }
-        if (usesClientSideDecorations())
-        {
-            position.y -= captionHeight;
-        }
+
+        if (button == MouseButton::Left && pressed)
+            fCaptionClickPending = false;
+        position -= contentOffset();
         fMousePosition = position;
         dispatchEvent(EventMouseButton{button, pressed, position});
+    }
+
+    bool WindowBackendWayland::isCaptionDoubleClick(uint32_t time, Point position)
+    {
+        constexpr uint32_t DoubleClickTimeMilliseconds = 500;
+        constexpr int32_t DoubleClickRadiusSquared = 25;
+        const bool doubleClick = fCaptionClickPending && time - fLastCaptionClickTime <= DoubleClickTimeMilliseconds &&
+                                 position.DistanceSquared(fLastCaptionClickPosition) <= DoubleClickRadiusSquared;
+        fCaptionClickPending = !doubleClick;
+        fLastCaptionClickTime = time;
+        fLastCaptionClickPosition = position;
+        return doubleClick;
     }
 
     void WindowBackendWayland::handlePointerWheel(int32_t delta, Point position)
@@ -647,7 +890,7 @@ namespace LWS
 
     void WindowBackendWayland::setAppId(const std::string& appId)
     {
-        if (fNativeState != nullptr)
+        if (fNativeState != nullptr && fNativeState->toplevel != nullptr)
         {
             xdg_toplevel_set_app_id(fNativeState->toplevel, appId.c_str());
         }
@@ -675,17 +918,169 @@ namespace LWS
         return handled;
     }
 
-    bool WindowBackendWayland::usesClientSideDecorations() const
+    void WindowBackendWayland::applyCursor(CursorShape shape, bool visible)
     {
-        return internal::WaylandPlatformState::current().decorationManager() == nullptr &&
-               (std::to_underlying(fWindowStyles) & std::to_underlying(WindowStyle::Caption)) != 0;
+        if (fNativeState == nullptr || !fNativeState->frameCursorShape.has_value())
+            internal::WaylandPlatformState::current().applyCursor(*this, shape, visible);
     }
 
-    bool WindowBackendWayland::isCloseButton(Point position) const
+    void WindowBackendWayland::applyClientCursor()
     {
-        return (std::to_underlying(fWindowStyles) & std::to_underlying(WindowStyle::CloseButton)) != 0 &&
-               position.x >= fSize.x - closeButtonWidth && position.x < fSize.x && position.y >= 0 &&
-               position.y < captionHeight;
+        if (auto* waylandCursor = dynamic_cast<CursorBackendWayland*>(fCursor.get()); waylandCursor != nullptr)
+            waylandCursor->apply();
+        else
+            internal::WaylandPlatformState::current().applyCursor(*this, CursorShape::Arrow, true);
+    }
+
+    void WindowBackendWayland::applyFrameCursor(const internal::WaylandFrameHit& hit)
+    {
+        if (fNativeState == nullptr)
+            return;
+
+        std::optional<CursorShape> shape;
+        switch (hit.edge)
+        {
+            case internal::WaylandResizeEdge::Top:
+            case internal::WaylandResizeEdge::Bottom:
+                shape = CursorShape::SizeNS;
+                break;
+            case internal::WaylandResizeEdge::Left:
+            case internal::WaylandResizeEdge::Right:
+                shape = CursorShape::SizeEW;
+                break;
+            case internal::WaylandResizeEdge::TopLeft:
+            case internal::WaylandResizeEdge::BottomRight:
+                shape = CursorShape::SizeNWSE;
+                break;
+            case internal::WaylandResizeEdge::TopRight:
+            case internal::WaylandResizeEdge::BottomLeft:
+                shape = CursorShape::SizeNESW;
+                break;
+            case internal::WaylandResizeEdge::None:
+                if (hit.action != internal::WaylandFrameAction::Client)
+                    shape = CursorShape::Arrow;
+                break;
+        }
+
+        if (shape.has_value())
+        {
+            if (fNativeState->frameCursorShape != shape)
+            {
+                fNativeState->frameCursorShape = shape;
+                internal::WaylandPlatformState::current().applyCursor(*this, *shape, true);
+            }
+        }
+        else if (fNativeState->frameCursorShape.has_value())
+        {
+            fNativeState->frameCursorShape.reset();
+            applyClientCursor();
+        }
+    }
+
+    bool WindowBackendWayland::beginResize(internal::WaylandResizeEdge edge)
+    {
+        if (edge == internal::WaylandResizeEdge::None || !canResize())
+            return false;
+
+        auto& platform = internal::WaylandPlatformState::current();
+        if (platform.seat() == nullptr || platform.pointerButtonSerial() == 0)
+            return false;
+
+        xdg_toplevel_resize(fNativeState->toplevel, platform.seat(), platform.pointerButtonSerial(),
+                            static_cast<xdg_toplevel_resize_edge>(std::to_underlying(edge)));
+        return true;
+    }
+
+    bool WindowBackendWayland::canResize() const
+    {
+        return fNativeState != nullptr && fNativeState->toplevel != nullptr &&
+               internal::isWaylandResizeEnabled(fWindowStyles, fDisplayState, fFullScreen, isChildWindow());
+    }
+
+    Point WindowBackendWayland::contentOffset() const
+    {
+        return {0, showsClientSideDecorations() ? internal::waylandCaptionHeight : 0};
+    }
+
+    internal::WaylandCaptionMode WindowBackendWayland::captionMode() const
+    {
+        const bool captionStyle = (std::to_underlying(fWindowStyles) & std::to_underlying(WindowStyle::Caption)) != 0;
+        return internal::waylandCaptionMode(isChildWindow(),
+                                            internal::WaylandPlatformState::current().hasHostWindowFrame(),
+                                            decorationMode(), captionStyle);
+    }
+
+    internal::WaylandDecorationMode WindowBackendWayland::decorationMode() const
+    {
+        if (fNativeState != nullptr && fNativeState->decoration != nullptr)
+            return fNativeState->decorationMode;
+        return internal::WaylandPlatformState::current().decorationManager() == nullptr
+                   ? internal::WaylandDecorationMode::None
+                   : internal::WaylandDecorationMode::Pending;
+    }
+
+    internal::WaylandFrameHit WindowBackendWayland::frameHit(Point position,
+                                                             internal::WaylandSurfaceRole surfaceRole) const
+    {
+        const bool clientDecorations = showsClientSideDecorations();
+        const bool detachedCaption = showsDetachedCaption();
+        const bool onCaption = surfaceRole == internal::WaylandSurfaceRole::Caption;
+        if ((onCaption && !detachedCaption) || (!onCaption && !clientDecorations && !detachedCaption))
+            return {};
+
+        const Size surfaceSize = onCaption ? Size{fNativeState->captionWidth, internal::waylandCaptionHeight}
+                                           : Size{fSize.x,
+                                                  fSize.y + (clientDecorations ? internal::waylandCaptionHeight : 0)};
+        const bool closeButton = (std::to_underlying(fWindowStyles) & std::to_underlying(WindowStyle::CloseButton)) !=
+                                 0;
+        return internal::waylandFrameHit(position, surfaceSize,
+                                         {
+                                             .surface = surfaceRole,
+                                             .detachedCaption = detachedCaption,
+                                             .closeButton = closeButton,
+                                             .resizeEnabled = canResize(),
+                                         });
+    }
+
+    bool WindowBackendWayland::isChildWindow() const
+    {
+        if (fNativeState != nullptr)
+            return fNativeState->subsurface != nullptr;
+        return (std::to_underlying(fWindowStyles) & std::to_underlying(WindowStyle::ChildWindow)) != 0;
+    }
+
+    void WindowBackendWayland::updateSubsurfacePosition()
+    {
+        if (fNativeState != nullptr && fNativeState->subsurface != nullptr)
+        {
+            const Point parentOffset = fParentBackend != nullptr ? fParentBackend->contentOffset() : Point{};
+            wl_subsurface_set_position(fNativeState->subsurface, fPosition.x + parentOffset.x,
+                                       fPosition.y + parentOffset.y);
+        }
+    }
+
+    bool WindowBackendWayland::showsClientSideDecorations() const
+    {
+        return !fFullScreen && captionMode() == internal::WaylandCaptionMode::ClientSide;
+    }
+
+    bool WindowBackendWayland::showsDetachedCaption() const
+    {
+        return !fFullScreen && captionMode() == internal::WaylandCaptionMode::Detached;
+    }
+
+    void WindowBackendWayland::updateWindowGeometry()
+    {
+        if (fNativeState == nullptr || fNativeState->shellSurface == nullptr || fSize.x <= 0 || fSize.y <= 0)
+            return;
+
+        const bool clientCaptionVisible = showsClientSideDecorations();
+        const bool detachedCaptionVisible = fVisible && showsDetachedCaption();
+        const int32_t captionHeight = clientCaptionVisible || detachedCaptionVisible ? internal::waylandCaptionHeight
+                                                                                     : 0;
+        xdg_surface_set_window_geometry(fNativeState->shellSurface, 0,
+                                        detachedCaptionVisible ? -internal::waylandCaptionHeight : 0, fSize.x,
+                                        fSize.y + captionHeight);
     }
 
     void WindowBackendWayland::paintBackground()
@@ -704,7 +1099,7 @@ namespace LWS
         fNativeState->releaseBuffer();
         constexpr size_t bytesPerPixel = 4;
         const size_t width = static_cast<size_t>(fSize.x);
-        const int32_t bufferHeight = fSize.y + (usesClientSideDecorations() ? captionHeight : 0);
+        const int32_t bufferHeight = fSize.y + (showsClientSideDecorations() ? internal::waylandCaptionHeight : 0);
         const size_t height = static_cast<size_t>(bufferHeight);
         if (width > std::numeric_limits<size_t>::max() / bytesPerPixel / height)
         {
@@ -751,29 +1146,27 @@ namespace LWS
         const uint32_t pixel = alpha << 24U | static_cast<uint32_t>(fBackgroundColor.R()) << 16U |
                                static_cast<uint32_t>(fBackgroundColor.G()) << 8U | fBackgroundColor.B();
         std::fill_n(static_cast<uint32_t*>(mapping), width * height, pixel);
-        if (usesClientSideDecorations())
+        if (showsClientSideDecorations())
         {
             auto* pixels = static_cast<uint32_t*>(mapping);
             constexpr uint32_t captionColor = 0xff303030U;
             constexpr uint32_t closeColor = 0xffc42b1cU;
             constexpr uint32_t glyphColor = 0xffffffffU;
-            std::fill_n(pixels, width * captionHeight, captionColor);
+            std::fill_n(pixels, width * internal::waylandCaptionHeight, captionColor);
             if ((std::to_underlying(fWindowStyles) & std::to_underlying(WindowStyle::CloseButton)) != 0)
             {
-                const int32_t closeLeft = std::max(fSize.x - closeButtonWidth, 0);
-                for (int32_t y = 0; y < captionHeight; ++y)
+                const int32_t closeLeft = std::max(fSize.x - internal::waylandCloseButtonWidth, 0);
+                for (int32_t y = 0; y < internal::waylandCaptionHeight; ++y)
                     std::fill_n(pixels + static_cast<size_t>(y) * width + closeLeft, fSize.x - closeLeft, closeColor);
                 const int32_t centerX = closeLeft + (fSize.x - closeLeft) / 2;
-                const int32_t centerY = captionHeight / 2;
+                const int32_t centerY = internal::waylandCaptionHeight / 2;
                 for (int32_t offset = -5; offset <= 5; ++offset)
                 {
                     pixels[static_cast<size_t>(centerY + offset) * width + centerX + offset] = glyphColor;
                     pixels[static_cast<size_t>(centerY + offset) * width + centerX - offset] = glyphColor;
                 }
             }
-            xdg_surface_set_window_geometry(fNativeState->shellSurface, 0, 0, fSize.x, bufferHeight);
         }
-
         fNativeState->buffer = buffer;
         fNativeState->mapping = mapping;
         fNativeState->mappingSize = bufferSize;
@@ -791,6 +1184,97 @@ namespace LWS
         }
         wl_surface_commit(fNativeState->surface);
         dispatchEvent(EventPaint{});
+    }
+
+    void WindowBackendWayland::paintCaption()
+    {
+        if (fNativeState == nullptr || fNativeState->captionSurface == nullptr ||
+            fNativeState->shellSurface == nullptr || !fNativeState->configured)
+        {
+            return;
+        }
+
+        const bool visible = fVisible && showsDetachedCaption() && fSize.x > 0;
+        if (!visible)
+        {
+            wl_surface_attach(fNativeState->captionSurface, nullptr, 0, 0);
+            wl_surface_commit(fNativeState->captionSurface);
+            fNativeState->captionWidth = 0;
+            return;
+        }
+
+        constexpr size_t bytesPerPixel = 4;
+        const size_t width = static_cast<size_t>(fSize.x);
+        const size_t stride = width * bytesPerPixel;
+        const size_t bufferSize = stride * internal::waylandCaptionHeight;
+        const int fd = createAnonymousFile();
+        if (fd < 0 || bufferSize > static_cast<size_t>(std::numeric_limits<off_t>::max()) ||
+            ftruncate(fd, static_cast<off_t>(bufferSize)) != 0)
+        {
+            if (fd >= 0)
+                close(fd);
+            return;
+        }
+
+        void* mapping = mmap(nullptr, bufferSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+        if (mapping == MAP_FAILED)
+        {
+            close(fd);
+            return;
+        }
+
+        wl_shm_pool* pool = wl_shm_create_pool(internal::WaylandPlatformState::current().sharedMemory(), fd,
+                                               static_cast<int32_t>(bufferSize));
+        wl_buffer* buffer = pool != nullptr
+                                ? wl_shm_pool_create_buffer(pool, 0, fSize.x, internal::waylandCaptionHeight,
+                                                            static_cast<int32_t>(stride), WL_SHM_FORMAT_ARGB8888)
+                                : nullptr;
+        if (pool != nullptr)
+            wl_shm_pool_destroy(pool);
+        close(fd);
+        if (buffer == nullptr)
+        {
+            munmap(mapping, bufferSize);
+            return;
+        }
+
+        auto* pixels = static_cast<uint32_t*>(mapping);
+        constexpr uint32_t captionColor = 0xff303030U;
+        constexpr uint32_t closeColor = 0xffc42b1cU;
+        constexpr uint32_t glyphColor = 0xffffffffU;
+        std::fill_n(pixels, width * internal::waylandCaptionHeight, captionColor);
+        const bool closeButton = (std::to_underlying(fWindowStyles) & std::to_underlying(WindowStyle::CloseButton)) !=
+                                 0;
+        const int32_t titleRight = closeButton ? std::max(fSize.x - internal::waylandCloseButtonWidth, 0) : fSize.x;
+        internal::renderCaptionTitle({pixels, width * internal::waylandCaptionHeight}, fSize.x, fTitle, titleRight);
+        if (closeButton)
+        {
+            const int32_t closeLeft = std::max(fSize.x - internal::waylandCloseButtonWidth, 0);
+            for (int32_t y = 0; y < internal::waylandCaptionHeight; ++y)
+                std::fill_n(pixels + static_cast<size_t>(y) * width + closeLeft, fSize.x - closeLeft, closeColor);
+            const int32_t centerX = closeLeft + (fSize.x - closeLeft) / 2;
+            const int32_t centerY = internal::waylandCaptionHeight / 2;
+            for (int32_t offset = -5; offset <= 5; ++offset)
+            {
+                pixels[static_cast<size_t>(centerY + offset) * width + centerX + offset] = glyphColor;
+                pixels[static_cast<size_t>(centerY + offset) * width + centerX - offset] = glyphColor;
+            }
+        }
+
+        auto captionBuffer = std::make_unique<NativeState::CaptionBuffer>(*fNativeState);
+        captionBuffer->buffer = buffer;
+        captionBuffer->mapping = mapping;
+        captionBuffer->mappingSize = bufferSize;
+        static constexpr wl_buffer_listener bufferListener{.release = NativeState::CaptionBuffer::released};
+        wl_buffer_add_listener(buffer, &bufferListener, captionBuffer.get());
+        wl_surface_attach(fNativeState->captionSurface, buffer, 0, 0);
+        if (wl_surface_get_version(fNativeState->captionSurface) >= WL_SURFACE_DAMAGE_BUFFER_SINCE_VERSION)
+            wl_surface_damage_buffer(fNativeState->captionSurface, 0, 0, fSize.x, internal::waylandCaptionHeight);
+        else
+            wl_surface_damage(fNativeState->captionSurface, 0, 0, fSize.x, internal::waylandCaptionHeight);
+        wl_surface_commit(fNativeState->captionSurface);
+        fNativeState->captionWidth = fSize.x;
+        fNativeState->captionBuffers.push_back(std::move(captionBuffer));
     }
 }  // namespace LWS
 

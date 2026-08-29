@@ -22,6 +22,7 @@ namespace LWS
             NotificationIcon,
             NotificationIconGeometry,
             ServerSideDecorations,
+            HostWindowFrame,
         };
 
         struct MonitorDesc

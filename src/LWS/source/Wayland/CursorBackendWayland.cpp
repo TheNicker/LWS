@@ -3,6 +3,16 @@
 #ifdef LWS_PLATFORM_WAYLAND
 
     #include "internal/PlatformState.hpp"
+    #include "internal/WaylandCursorController.hpp"
+
+    #include <LWS/Wayland/WindowBackendWayland.hpp>
+
+    #include <algorithm>
+    #include <array>
+    #include <charconv>
+    #include <cstdlib>
+    #include <span>
+    #include <string_view>
 
     #include <wayland-client.h>
 
@@ -12,41 +22,96 @@
 
 namespace
 {
-    const char* cursorName(LWS::CursorShape shape)
+    #ifdef LWS_HAS_WAYLAND_CURSOR
+    constexpr int32_t defaultCursorSize = 24;
+    constexpr int32_t maxCursorSize = 256;
+
+    int32_t cursorSize()
+    {
+        const char* text = std::getenv("XCURSOR_SIZE");
+        int32_t size = defaultCursorSize;
+        if (text != nullptr)
+        {
+            const std::string_view value{text};
+            int32_t configuredSize = 0;
+            const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), configuredSize);
+            if (error == std::errc{} && end == value.data() + value.size() && configuredSize > 0)
+                size = std::min(configuredSize, maxCursorSize);
+        }
+        return size;
+    }
+
+    const char* cursorTheme()
+    {
+        const char* theme = std::getenv("XCURSOR_THEME");
+        return theme != nullptr && *theme != '\0' ? theme : nullptr;
+    }
+
+    std::span<const char* const> cursorNames(LWS::CursorShape shape)
     {
         using LWS::CursorShape;
+        static constexpr std::array arrow{"left_ptr", "default"};
+        static constexpr std::array hand{"pointer", "hand2"};
+        static constexpr std::array text{"text", "xterm"};
+        static constexpr std::array sizeNS{"ns-resize", "n-resize", "s-resize", "top_side", "bottom_side"};
+        static constexpr std::array sizeEW{"ew-resize", "e-resize", "w-resize", "right_side", "left_side"};
+        static constexpr std::array sizeNWSE{"nwse-resize", "nw-resize", "se-resize", "top_left_corner",
+                                             "bottom_right_corner"};
+        static constexpr std::array sizeNESW{"nesw-resize", "ne-resize", "sw-resize", "top_right_corner",
+                                             "bottom_left_corner"};
+        static constexpr std::array sizeAll{"all-resize", "move"};
+        static constexpr std::array no{"not-allowed", "crossed_circle"};
+        static constexpr std::array wait{"wait", "watch"};
+        static constexpr std::array appStarting{"progress", "left_ptr_watch"};
         switch (shape)
         {
             case CursorShape::Arrow:
-                return "left_ptr";
+                return arrow;
             case CursorShape::Hand:
-                return "pointer";
+                return hand;
             case CursorShape::IBeam:
-                return "text";
+                return text;
             case CursorShape::SizeNS:
-                return "ns-resize";
+                return sizeNS;
             case CursorShape::SizeEW:
-                return "ew-resize";
+                return sizeEW;
             case CursorShape::SizeNWSE:
-                return "nwse-resize";
+                return sizeNWSE;
             case CursorShape::SizeNESW:
-                return "nesw-resize";
+                return sizeNESW;
             case CursorShape::SizeAll:
-                return "move";
+                return sizeAll;
             case CursorShape::No:
-                return "not-allowed";
+                return no;
             case CursorShape::Wait:
-                return "wait";
+                return wait;
             case CursorShape::AppStarting:
-                return "progress";
+                return appStarting;
         }
-        return "left_ptr";
+        return arrow;
     }
+
+    wl_cursor* findCursor(wl_cursor_theme* theme, LWS::CursorShape shape)
+    {
+        if (theme != nullptr)
+        {
+            for (const char* name : cursorNames(shape))
+            {
+                if (wl_cursor* cursor = wl_cursor_theme_get_cursor(theme, name);
+                    cursor != nullptr && cursor->image_count > 0)
+                {
+                    return cursor;
+                }
+            }
+        }
+        return nullptr;
+    }
+    #endif
 }  // namespace
 
-namespace LWS
+namespace LWS::internal
 {
-    class CursorBackendWayland::NativeState
+    class WaylandCursorController::NativeState
     {
       public:
 
@@ -57,46 +122,115 @@ namespace LWS
     #ifdef LWS_HAS_WAYLAND_CURSOR
             if (theme != nullptr)
                 wl_cursor_theme_destroy(theme);
+            if (fallbackTheme != nullptr)
+                wl_cursor_theme_destroy(fallbackTheme);
     #endif
         }
+
+        void initialize(wl_compositor* compositor, wl_shm* sharedMemory)
+        {
+            if (surface == nullptr)
+                surface = wl_compositor_create_surface(compositor);
+    #ifdef LWS_HAS_WAYLAND_CURSOR
+            if (!themeLoaded)
+            {
+                size = cursorSize();
+                theme = wl_cursor_theme_load(cursorTheme(), size, sharedMemory);
+                themeLoaded = true;
+            }
+    #endif
+        }
+
+    #ifdef LWS_HAS_WAYLAND_CURSOR
+        wl_cursor* selectCursor(CursorShape shape, wl_shm* sharedMemory)
+        {
+            wl_cursor* cursor = findCursor(theme, shape);
+            if (cursor == nullptr)
+            {
+                if (!fallbackThemeLoaded)
+                {
+                    fallbackTheme = wl_cursor_theme_load("Adwaita", size, sharedMemory);
+                    fallbackThemeLoaded = true;
+                }
+                cursor = findCursor(fallbackTheme, shape);
+            }
+            return cursor;
+        }
+    #endif
 
         wl_surface* surface = nullptr;
     #ifdef LWS_HAS_WAYLAND_CURSOR
         wl_cursor_theme* theme = nullptr;
-        wl_cursor* cursor = nullptr;
+        wl_cursor_theme* fallbackTheme = nullptr;
+        int32_t size = defaultCursorSize;
+        bool themeLoaded = false;
+        bool fallbackThemeLoaded = false;
     #endif
     };
 
-    CursorBackendWayland::CursorBackendWayland() : fNativeState(std::make_unique<NativeState>())
+    WaylandCursorController::WaylandCursorController() : fNativeState(std::make_unique<NativeState>()) {}
+    WaylandCursorController::~WaylandCursorController() = default;
+
+    void WaylandCursorController::apply(CursorShape shape, bool visible, wl_pointer* pointer, uint32_t enterSerial,
+                                        wl_compositor* compositor, wl_shm* sharedMemory)
     {
-        auto& platform = internal::WaylandPlatformState::current();
-        if (platform.isInitialized())
+        if (pointer == nullptr || enterSerial == 0)
+            return;
+        if (!visible)
         {
-            fNativeState->surface = wl_compositor_create_surface(platform.compositor());
-    #ifdef LWS_HAS_WAYLAND_CURSOR
-            fNativeState->theme = wl_cursor_theme_load(nullptr, 24, platform.sharedMemory());
-    #endif
+            wl_pointer_set_cursor(pointer, enterSerial, nullptr, 0, 0);
+            return;
         }
+
+    #ifdef LWS_HAS_WAYLAND_CURSOR
+        if (compositor == nullptr || sharedMemory == nullptr)
+            return;
+
+        fNativeState->initialize(compositor, sharedMemory);
+        wl_cursor* cursor = fNativeState->selectCursor(shape, sharedMemory);
+        if (fNativeState->surface == nullptr || cursor == nullptr || cursor->image_count == 0)
+            return;
+
+        wl_cursor_image* image = cursor->images[0];
+        if (wl_buffer* buffer = wl_cursor_image_get_buffer(image); buffer != nullptr)
+        {
+            wl_pointer_set_cursor(pointer, enterSerial, fNativeState->surface, static_cast<int32_t>(image->hotspot_x),
+                                  static_cast<int32_t>(image->hotspot_y));
+            wl_surface_attach(fNativeState->surface, buffer, 0, 0);
+            wl_surface_damage(fNativeState->surface, 0, 0, static_cast<int32_t>(image->width),
+                              static_cast<int32_t>(image->height));
+            wl_surface_commit(fNativeState->surface);
+        }
+    #endif
     }
 
+    void WaylandCursorController::reset()
+    {
+        fNativeState = std::make_unique<NativeState>();
+    }
+}  // namespace LWS::internal
+
+namespace LWS
+{
+    CursorBackendWayland::CursorBackendWayland() = default;
     CursorBackendWayland::~CursorBackendWayland() = default;
 
     void CursorBackendWayland::setVisible(bool visible)
     {
-        fVisible = visible;
-        apply();
+        if (fVisible != visible)
+        {
+            fVisible = visible;
+            apply();
+        }
     }
 
     void CursorBackendWayland::setCursorShape(CursorShape shape)
     {
-        fShape = shape;
-    #ifdef LWS_HAS_WAYLAND_CURSOR
-        if (fNativeState->theme != nullptr)
+        if (fShape != shape)
         {
-            fNativeState->cursor = wl_cursor_theme_get_cursor(fNativeState->theme, cursorName(shape));
+            fShape = shape;
+            apply();
         }
-    #endif
-        apply();
     }
 
     void CursorBackendWayland::setCustomCursor(const BitmapBuffer&)
@@ -105,43 +239,20 @@ namespace LWS
         // BitmapBuffer does not currently carry. Keep the current named cursor intact.
     }
 
+    void CursorBackendWayland::attach(WindowBackendWayland& owner)
+    {
+        fOwners.insert(&owner);
+    }
+
+    void CursorBackendWayland::detach(WindowBackendWayland& owner)
+    {
+        fOwners.erase(&owner);
+    }
+
     void CursorBackendWayland::apply()
     {
-        auto& platform = internal::WaylandPlatformState::current();
-        wl_pointer* pointer = platform.pointer();
-        if (pointer == nullptr || platform.pointerSerial() == 0)
-        {
-            return;
-        }
-        if (!fVisible)
-        {
-            wl_pointer_set_cursor(pointer, platform.pointerSerial(), nullptr, 0, 0);
-            return;
-        }
-
-    #ifdef LWS_HAS_WAYLAND_CURSOR
-        if (fNativeState->theme == nullptr || fNativeState->surface == nullptr)
-        {
-            return;
-        }
-        fNativeState->cursor = wl_cursor_theme_get_cursor(fNativeState->theme, cursorName(fShape));
-        if (fNativeState->cursor == nullptr || fNativeState->cursor->image_count == 0)
-        {
-            return;
-        }
-
-        wl_cursor_image* image = fNativeState->cursor->images[0];
-        wl_buffer* buffer = wl_cursor_image_get_buffer(image);
-        if (buffer != nullptr)
-        {
-            wl_pointer_set_cursor(pointer, platform.pointerSerial(), fNativeState->surface,
-                                  static_cast<int32_t>(image->hotspot_x), static_cast<int32_t>(image->hotspot_y));
-            wl_surface_attach(fNativeState->surface, buffer, 0, 0);
-            wl_surface_damage(fNativeState->surface, 0, 0, static_cast<int32_t>(image->width),
-                              static_cast<int32_t>(image->height));
-            wl_surface_commit(fNativeState->surface);
-        }
-    #endif
+        for (WindowBackendWayland* owner : fOwners)
+            owner->applyCursor(fShape, fVisible);
     }
 }  // namespace LWS
 

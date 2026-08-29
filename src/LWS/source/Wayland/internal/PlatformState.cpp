@@ -106,7 +106,7 @@ namespace LWS::internal
             {
                 while (!fWindows.empty())
                 {
-                    fWindows.begin()->second->destroy();
+                    fWindows.begin()->second.window->destroy();
                 }
                 releaseObjects();
             }
@@ -155,9 +155,10 @@ namespace LWS::internal
         }
     }
 
-    void WaylandPlatformState::registerWindow(wl_surface* surface, WindowBackendWayland& window)
+    void WaylandPlatformState::registerWindow(wl_surface* surface, WindowBackendWayland& window,
+                                              WaylandSurfaceRole role)
     {
-        fWindows.emplace(surface, &window);
+        fWindows.emplace(surface, WindowRegistration{&window, role});
     }
 
     void WaylandPlatformState::unregisterWindow(wl_surface* surface)
@@ -177,7 +178,13 @@ namespace LWS::internal
     WindowBackendWayland* WaylandPlatformState::findWindow(wl_surface* surface) const
     {
         const auto it = fWindows.find(surface);
-        return it != fWindows.end() ? it->second : nullptr;
+        return it != fWindows.end() ? it->second.window : nullptr;
+    }
+
+    void WaylandPlatformState::applyCursor(WindowBackendWayland& window, CursorShape shape, bool visible)
+    {
+        if (fPointerWindow == &window)
+            fCursorController.apply(shape, visible, fPointer, fPointerEnterSerial, fCompositor, fSharedMemory);
     }
 
     bool WaylandPlatformState::isKeyPressed(KeyCode key) const
@@ -239,6 +246,11 @@ namespace LWS::internal
             state.fCompositor = static_cast<wl_compositor*>(
                 wl_registry_bind(registry, name, &wl_compositor_interface, std::min(version, 6U)));
         }
+        else if (std::strcmp(interface, wl_subcompositor_interface.name) == 0)
+        {
+            state.fSubcompositor = static_cast<wl_subcompositor*>(
+                wl_registry_bind(registry, name, &wl_subcompositor_interface, std::min(version, 1U)));
+        }
         else if (std::strcmp(interface, wl_shm_interface.name) == 0)
         {
             state.fSharedMemory = static_cast<wl_shm*>(
@@ -255,6 +267,10 @@ namespace LWS::internal
         {
             state.fDecorationManager = static_cast<zxdg_decoration_manager_v1*>(
                 wl_registry_bind(registry, name, &zxdg_decoration_manager_v1_interface, std::min(version, 1U)));
+        }
+        else if (std::strcmp(interface, "weston_rdprail_shell") == 0)
+        {
+            state.fHasHostWindowFrame = true;
         }
         else if (std::strcmp(interface, wl_seat_interface.name) == 0 && state.fSeat == nullptr)
         {
@@ -367,12 +383,20 @@ namespace LWS::internal
                                             wl_fixed_t y)
     {
         auto& state = *static_cast<WaylandPlatformState*>(data);
-        state.fPointerSerial = serial;
+        state.fPointerEnterSerial = serial;
+        state.fPointerButtonSerial = 0;
         state.fPointerPosition = {wl_fixed_to_int(x), wl_fixed_to_int(y)};
-        state.fPointerWindow = state.findWindow(surface);
-        if (state.fPointerWindow != nullptr)
+        const auto registration = state.fWindows.find(surface);
+        if (registration != state.fWindows.end())
         {
-            state.fPointerWindow->handlePointerEnter(state.fPointerPosition);
+            state.fPointerWindow = registration->second.window;
+            state.fPointerSurfaceRole = registration->second.role;
+            state.fPointerWindow->handlePointerEnter(state.fPointerPosition, state.fPointerSurfaceRole);
+        }
+        else
+        {
+            state.fPointerWindow = nullptr;
+            state.fPointerSurfaceRole = WaylandSurfaceRole::Content;
         }
     }
 
@@ -384,6 +408,9 @@ namespace LWS::internal
             state.fPointerWindow->handlePointerLeave();
             state.fPointerWindow = nullptr;
         }
+        state.fPointerSurfaceRole = WaylandSurfaceRole::Content;
+        state.fPointerButtonSerial = 0;
+        state.fPointerEnterSerial = 0;
     }
 
     void WaylandPlatformState::pointerMotion(void* data, wl_pointer*, uint32_t, wl_fixed_t x, wl_fixed_t y)
@@ -394,20 +421,20 @@ namespace LWS::internal
         state.fPointerPosition = position;
         if (state.fPointerWindow != nullptr)
         {
-            state.fPointerWindow->handlePointerMotion(position, delta);
+            state.fPointerWindow->handlePointerMotion(position, delta, state.fPointerSurfaceRole);
         }
     }
 
-    void WaylandPlatformState::pointerButton(void* data, wl_pointer*, uint32_t serial, uint32_t, uint32_t button,
+    void WaylandPlatformState::pointerButton(void* data, wl_pointer*, uint32_t serial, uint32_t time, uint32_t button,
                                              uint32_t buttonState)
     {
         auto& state = *static_cast<WaylandPlatformState*>(data);
-        state.fPointerSerial = serial;
+        state.fPointerButtonSerial = serial;
         if (state.fPointerWindow != nullptr)
         {
             state.fPointerWindow->handlePointerButton(mouseButtonFromLinux(button),
                                                       buttonState == WL_POINTER_BUTTON_STATE_PRESSED,
-                                                      state.fPointerPosition);
+                                                      state.fPointerPosition, state.fPointerSurfaceRole, time);
         }
     }
 
@@ -671,9 +698,13 @@ namespace LWS::internal
 
     void WaylandPlatformState::releaseObjects()
     {
+        fCursorController.reset();
         fWindows.clear();
         fPressedKeys.clear();
         fPointerWindow = nullptr;
+        fPointerSurfaceRole = WaylandSurfaceRole::Content;
+        fPointerButtonSerial = 0;
+        fPointerEnterSerial = 0;
         fKeyboardWindow = nullptr;
         if (fKeyboard != nullptr)
             wl_keyboard_release(fKeyboard);
@@ -690,6 +721,8 @@ namespace LWS::internal
             zxdg_decoration_manager_v1_destroy(fDecorationManager);
         if (fSharedMemory != nullptr)
             wl_shm_destroy(fSharedMemory);
+        if (fSubcompositor != nullptr)
+            wl_subcompositor_destroy(fSubcompositor);
         if (fCompositor != nullptr)
             wl_compositor_destroy(fCompositor);
         if (fRegistry != nullptr)
@@ -706,6 +739,7 @@ namespace LWS::internal
         fShell = nullptr;
         fDecorationManager = nullptr;
         fSharedMemory = nullptr;
+        fSubcompositor = nullptr;
         fCompositor = nullptr;
         fRegistry = nullptr;
         fDisplay = nullptr;
@@ -719,6 +753,7 @@ namespace LWS::internal
             fTasks.clear();
         }
         fQuitRequested = false;
+        fHasHostWindowFrame = false;
     }
 }  // namespace LWS::internal
 

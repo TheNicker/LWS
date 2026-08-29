@@ -2,6 +2,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <LWS/Event.hpp>
+#include <LWS/Cursor.hpp>
 #include <LWS/KeyCode.hpp>
 #include <LWS/MouseButton.hpp>
 #include <LWS/NotificationIconGroup.hpp>
@@ -12,6 +13,26 @@
 
 #include <type_traits>
 #include <utility>
+
+namespace
+{
+    class LifetimeCursorBackend final : public LWS::ICursorBackend
+    {
+      public:
+
+        explicit LifetimeCursorBackend(bool& destroyed) : fDestroyed(destroyed) {}
+        ~LifetimeCursorBackend() override { fDestroyed = true; }
+
+        void setVisible(bool) override {}
+        void setCursorShape(LWS::CursorShape) override {}
+        void setCustomCursor(const LWS::BitmapBuffer&) override {}
+        LWS::BackendId backend() const override { return LWS::BackendId::Undefined; }
+
+      private:
+
+        bool& fDestroyed;
+    };
+}  // namespace
 
 // ---------------------------------------------------------------------------
 // Result enum
@@ -46,6 +67,20 @@ TEST_CASE("WindowConfig has expected defaults", "[config]")
     REQUIRE(cfg.maxSize.y == 0);
     REQUIRE(cfg.styles == LWS::WindowStyle::NoStyle);
     REQUIRE(cfg.displayState == LWS::WindowDisplayState::Restored);
+}
+
+TEST_CASE("Window cursor backend remains alive while a window retains it", "[cursor][lifetime]")
+{
+    bool destroyed = false;
+    std::shared_ptr<LWS::ICursorBackend> retainedBackend;
+    {
+        LWS::Cursor cursor(std::make_unique<LifetimeCursorBackend>(destroyed));
+        retainedBackend = cursor.getBackendShared();
+    }
+
+    REQUIRE_FALSE(destroyed);
+    retainedBackend.reset();
+    REQUIRE(destroyed);
 }
 
 // ---------------------------------------------------------------------------

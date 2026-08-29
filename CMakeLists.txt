@@ -22,6 +22,9 @@ elseif(UNIX)
     message(STATUS "Wayland found: ${Wayland_CLIENT_LIBRARY}")
     set(LWS_PLATFORM_WAYLAND ON)
 
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(CaptionText REQUIRED IMPORTED_TARGET pangocairo fontconfig)
+
     find_program(WAYLAND_SCANNER_EXECUTABLE NAMES wayland-scanner REQUIRED)
     find_path(WAYLAND_PROTOCOLS_DIRECTORY
         NAMES stable/xdg-shell/xdg-shell.xml
@@ -131,7 +134,7 @@ if(LWS_PLATFORM_WAYLAND)
       "${LWS_XDG_DECORATION_SOURCE}"
   )
   target_include_directories(LWSLib PRIVATE "${LWS_WAYLAND_GENERATED_DIR}")
-  target_link_libraries(LWSLib PRIVATE Wayland::Client)
+  target_link_libraries(LWSLib PRIVATE Wayland::Client PkgConfig::CaptionText)
   if(TARGET Wayland::Cursor)
     target_link_libraries(LWSLib PRIVATE Wayland::Cursor)
     target_compile_definitions(LWSLib PRIVATE LWS_HAS_WAYLAND_CURSOR)

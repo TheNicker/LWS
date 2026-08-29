@@ -48,8 +48,9 @@ namespace LWS::internal::platform_backend
     }
     bool supports(Feature feature)
     {
-        return feature == Feature::ServerSideDecorations &&
-               WaylandPlatformState::current().decorationManager() != nullptr;
+        if (feature == Feature::ServerSideDecorations)
+            return WaylandPlatformState::current().decorationManager() != nullptr;
+        return feature == Feature::HostWindowFrame && WaylandPlatformState::current().hasHostWindowFrame();
     }
     bool isKeyPressed(KeyCode key)
     {

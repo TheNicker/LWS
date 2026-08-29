@@ -24,6 +24,6 @@ namespace LWS
         std::shared_ptr<ICursorBackend> getBackendShared() const;
 
     protected:
-        std::unique_ptr<ICursorBackend> impl_;
+        std::shared_ptr<ICursorBackend> impl_;
     };
 }

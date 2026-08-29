@@ -1,4 +1,5 @@
 #pragma once
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -6,16 +7,25 @@
 
 namespace LWS
 {
+    namespace internal
+    {
+        enum class WaylandCaptionMode;
+        enum class WaylandDecorationMode;
+        struct WaylandFrameHit;
+        enum class WaylandResizeEdge : uint32_t;
+        enum class WaylandSurfaceRole;
+    }  // namespace internal
+
     /// Wayland implementation of IWindowBackend.
     /// All methods are currently stubs — to be implemented in a future commit
     /// when a Wayland compositor is available at build time.
     ///
     /// Protocol mapping:
-    ///   create()           → wl_surface + xdg_toplevel_surface (xdg-shell protocol)
-    ///   destroy()          → xdg_toplevel_destroy + wl_surface_destroy
-    ///   show/hide          → xdg_toplevel_set_minimized / unset_minimized
+    ///   create()           → wl_surface + xdg_toplevel or wl_subsurface for ChildWindow
+    ///   destroy()          → destroy the assigned role, then wl_surface
+    ///   show/hide          → attach or detach the surface buffer
     ///   setTitle()         → xdg_toplevel_set_title()
-    ///   setPosition()      → no direct Wayland API (compositor-controlled placement)
+    ///   setPosition()      → wl_subsurface position; top-level placement is compositor-controlled
     ///   setMinMaxSize()    → xdg_toplevel_set_min_size / set_max_size
     ///   setFullScreenState → xdg_toplevel_set_fullscreen / unset_fullscreen
     ///   setAlwaysOnTop()   → zwlr_layer_shell_v1 layer surface (extension; not universal)
@@ -85,25 +95,45 @@ namespace LWS
         Handle getHandle() const override;
         BackendId backend() const override { return BackendId::Wayland; }
 
-        void handlePointerEnter(Point position);
+        void handlePointerEnter(Point position, internal::WaylandSurfaceRole surfaceRole);
         void handlePointerLeave();
-        void handlePointerMotion(Point position, Point delta);
-        void handlePointerButton(MouseButton button, bool pressed, Point position);
+        void handlePointerMotion(Point position, Point delta, internal::WaylandSurfaceRole surfaceRole);
+        void handlePointerButton(MouseButton button, bool pressed, Point position,
+                                 internal::WaylandSurfaceRole surfaceRole, uint32_t time);
         void handlePointerWheel(int32_t delta, Point position);
         void handleKeyboardFocus(bool focused);
         void handleKey(KeyCode key, bool pressed, bool repeat = false);
+        void handleToplevelConfigure(Size size, bool maximized, bool fullscreen);
         void setAppId(const std::string& appId);
 
       private:
 
+        friend class CursorBackendWayland;
+
         class NativeState;
         std::unique_ptr<NativeState> fNativeState;
         std::shared_ptr<ICursorBackend> fCursor;
+        WindowBackendWayland* fParentBackend = nullptr;
 
         bool dispatchEvent(const AnyEvent& event);
+        void applyCursor(CursorShape shape, bool visible);
+        void applyClientCursor();
+        void applyFrameCursor(const internal::WaylandFrameHit& hit);
+        [[nodiscard]] bool beginResize(internal::WaylandResizeEdge edge);
+        [[nodiscard]] bool canResize() const;
+        [[nodiscard]] internal::WaylandCaptionMode captionMode() const;
+        [[nodiscard]] Point contentOffset() const;
+        [[nodiscard]] internal::WaylandDecorationMode decorationMode() const;
+        [[nodiscard]] internal::WaylandFrameHit frameHit(Point position,
+                                                         internal::WaylandSurfaceRole surfaceRole) const;
+        [[nodiscard]] bool isChildWindow() const;
         void paintBackground();
-        [[nodiscard]] bool usesClientSideDecorations() const;
-        [[nodiscard]] bool isCloseButton(Point position) const;
+        void paintCaption();
+        void updateWindowGeometry();
+        void updateSubsurfacePosition();
+        [[nodiscard]] bool showsClientSideDecorations() const;
+        [[nodiscard]] bool showsDetachedCaption() const;
+        [[nodiscard]] bool isCaptionDoubleClick(uint32_t time, Point position);
 
         // Wayland surface handles (opaque void* to avoid including wayland-client.h here)
         void* fWlSurface = nullptr;    // wl_surface*
@@ -111,7 +141,9 @@ namespace LWS
         void* fXdgToplevel = nullptr;  // xdg_toplevel*
 
         LWS::string_type fTitle;
+        Point fPosition{};
         Size fSize = {800, 600};
+        std::optional<Size> fRestoredClientSize;
         Size fMinSize = {0, 0};
         Size fMaxSize = {0, 0};
         bool fVisible = false;
@@ -128,6 +160,9 @@ namespace LWS
         FullScreenState fFullScreenState = FullScreenState::None;
         LockMouseToWindowMode fLockMode = LockMouseToWindowMode::NoLock;
         DoubleClickMode fDoubleClickMode = DoubleClickMode::NotSet;
+        bool fCaptionClickPending = false;
+        uint32_t fLastCaptionClickTime = 0;
+        Point fLastCaptionClickPosition{};
 
         uint64_t fNextListenerToken = 1;
         std::vector<std::pair<EventListenerToken, EventCallback>> fListeners;

@@ -20,6 +20,6 @@ namespace LWS
 
     std::shared_ptr<ICursorBackend> Cursor::getBackendShared() const
     {
-        return std::shared_ptr<ICursorBackend>(impl_.get(), [](ICursorBackend*) {});
+        return impl_;
     }
 }

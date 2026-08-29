@@ -294,6 +294,7 @@ namespace LWS::internal::platform_backend
         case Feature::NotificationIcon:
         case Feature::NotificationIconGeometry:
         case Feature::ServerSideDecorations:
+        case Feature::HostWindowFrame:
             return true;
         case Feature::PointerLock:
             return false;
