@@ -89,6 +89,7 @@ namespace LWS
         [[nodiscard]] DoubleClickMode GetDoubleClickMode() const;
         void SetLockMouseToWindowMode(LockMouseToWindowMode mode);
         [[nodiscard]] LockMouseToWindowMode GetLockMouseToWindowMode() const;
+        [[nodiscard]] Result SetPointerLocked(bool locked);
 
         void SetMouseCursor(Cursor* cursor);
         [[nodiscard]] Cursor* GetMouseCursor() const;

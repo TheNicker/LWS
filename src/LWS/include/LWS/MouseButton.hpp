@@ -7,6 +7,7 @@ namespace LWS
         Middle,
         Right,
         X1,
-        X2
+        X2,
+        Count
     };
 }

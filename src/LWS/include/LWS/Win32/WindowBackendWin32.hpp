@@ -63,6 +63,7 @@ namespace LWS
         Point getMousePosition() const override;
         void setLockMouseToWindowMode(LockMouseToWindowMode mode) override;
         LockMouseToWindowMode getLockMouseToWindowMode() const override;
+        Result setPointerLocked(bool locked) override;
         void setDoubleClickMode(DoubleClickMode mode) override;
         DoubleClickMode getDoubleClickMode() const override;
         void setCursor(std::shared_ptr<ICursorBackend> cursor) override;

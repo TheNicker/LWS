@@ -50,6 +50,9 @@ namespace LWS::internal::platform_backend
     {
         if (feature == Feature::ServerSideDecorations)
             return WaylandPlatformState::current().decorationManager() != nullptr;
+        if (feature == Feature::PointerLock)
+            return WaylandPlatformState::current().pointerConstraints() != nullptr &&
+                   WaylandPlatformState::current().relativePointerManager() != nullptr;
         return feature == Feature::HostWindowFrame && WaylandPlatformState::current().hasHostWindowFrame();
     }
     bool isKeyPressed(KeyCode key)

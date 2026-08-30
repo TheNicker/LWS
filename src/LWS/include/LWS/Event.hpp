@@ -28,7 +28,18 @@ namespace LWS
     struct EventKeyUp { KeyCode key; };
     struct EventMouseMove { Point position; Point delta; };
     struct EventMouseButton { MouseButton button; bool pressed; Point position; };
-    struct EventMouseWheel { int32_t delta; Point position; };
+    struct EventMouseWheel
+    {
+        static constexpr int32_t DeltaPerStep = 120;
+
+        int32_t delta;
+        Point position;
+
+        [[nodiscard]] constexpr double steps() const
+        {
+            return static_cast<double>(delta) / DeltaPerStep;
+        }
+    };
     struct EventPaint {};
     struct EventDragDropFile { std::filesystem::path fileName; };
     struct EventRawPlatform { uint32_t platformType; void* platformData = nullptr; };

@@ -124,6 +124,7 @@ namespace LWS
     DoubleClickMode Window::GetDoubleClickMode() const { return impl_->getDoubleClickMode(); }
     void Window::SetLockMouseToWindowMode(LockMouseToWindowMode mode) { impl_->setLockMouseToWindowMode(mode); }
     LockMouseToWindowMode Window::GetLockMouseToWindowMode() const { return impl_->getLockMouseToWindowMode(); }
+    Result Window::SetPointerLocked(bool locked) { return impl_->setPointerLocked(locked); }
 
     void Window::SetMouseCursor(Cursor* cursor)
     {

@@ -18,6 +18,8 @@
     #include <vector>
 
     #include <wayland-client.h>
+    #include <pointer-constraints-client-protocol.h>
+    #include <relative-pointer-client-protocol.h>
     #include <xdg-shell-client-protocol.h>
 
 namespace
@@ -72,7 +74,38 @@ namespace LWS
 
         explicit NativeState(WindowBackendWayland& window) : owner(window) {}
 
-        ~NativeState() { releaseBuffer(); }
+        ~NativeState()
+        {
+            releasePointerLock();
+            releaseBuffer();
+        }
+
+        void releasePointerLock()
+        {
+            if (relativePointer != nullptr)
+                zwp_relative_pointer_v1_destroy(relativePointer);
+            if (lockedPointer != nullptr)
+                zwp_locked_pointer_v1_destroy(lockedPointer);
+            relativePointer = nullptr;
+            lockedPointer = nullptr;
+        }
+
+        static void relativeMotion(void* data, zwp_relative_pointer_v1*, uint32_t, uint32_t, wl_fixed_t, wl_fixed_t,
+                                   wl_fixed_t deltaX, wl_fixed_t deltaY)
+        {
+            static_cast<NativeState*>(data)->owner.handleRelativePointerMotion(wl_fixed_to_double(deltaX),
+                                                                               wl_fixed_to_double(deltaY));
+        }
+
+        static void pointerLocked(void* data, zwp_locked_pointer_v1*)
+        {
+            static_cast<NativeState*>(data)->owner.handlePointerLockState(true);
+        }
+
+        static void pointerUnlocked(void* data, zwp_locked_pointer_v1*)
+        {
+            static_cast<NativeState*>(data)->owner.handlePointerLockState(false);
+        }
 
         void releaseBuffer()
         {
@@ -175,6 +208,8 @@ namespace LWS
         wl_surface* captionSurface = nullptr;
         wl_subsurface* captionSubsurface = nullptr;
         zxdg_toplevel_decoration_v1* decoration = nullptr;
+        zwp_locked_pointer_v1* lockedPointer = nullptr;
+        zwp_relative_pointer_v1* relativePointer = nullptr;
         internal::WaylandDecorationMode decorationMode = internal::WaylandDecorationMode::None;
         wl_buffer* buffer = nullptr;
         void* mapping = MAP_FAILED;
@@ -348,6 +383,7 @@ namespace LWS
             return;
         }
 
+        std::ignore = setPointerLocked(false);
         auto native = std::move(fNativeState);
         if (native->captionSurface != nullptr)
             internal::WaylandPlatformState::current().unregisterWindow(native->captionSurface);
@@ -714,6 +750,53 @@ namespace LWS
     {
         return fLockMode;
     }
+    Result WindowBackendWayland::setPointerLocked(bool locked)
+    {
+        if (fNativeState == nullptr)
+            return Result::NotCreated;
+        if (locked == fPointerLockRequested)
+            return Result::Success;
+
+        auto& platform = internal::WaylandPlatformState::current();
+        if (locked && (platform.pointer() == nullptr || platform.pointerConstraints() == nullptr ||
+                       platform.relativePointerManager() == nullptr))
+            return Result::NotSupported;
+
+        const bool wasActive = fPointerLockActive;
+        fPointerLockRequested = locked;
+        fPointerLockActive = false;
+        fRelativeRemainderX = 0.0;
+        fRelativeRemainderY = 0.0;
+        fNativeState->releasePointerLock();
+        if (locked)
+        {
+            fNativeState->lockedPointer = zwp_pointer_constraints_v1_lock_pointer(
+                platform.pointerConstraints(), fNativeState->surface, platform.pointer(), nullptr,
+                ZWP_POINTER_CONSTRAINTS_V1_LIFETIME_PERSISTENT);
+            fNativeState->relativePointer = zwp_relative_pointer_manager_v1_get_relative_pointer(
+                platform.relativePointerManager(), platform.pointer());
+            if (fNativeState->lockedPointer == nullptr || fNativeState->relativePointer == nullptr)
+            {
+                fNativeState->releasePointerLock();
+                fPointerLockRequested = false;
+                return Result::Failure;
+            }
+            static constexpr zwp_locked_pointer_v1_listener lockListener{
+                .locked = NativeState::pointerLocked,
+                .unlocked = NativeState::pointerUnlocked,
+            };
+            static constexpr zwp_relative_pointer_v1_listener relativeListener{
+                .relative_motion = NativeState::relativeMotion,
+            };
+            zwp_locked_pointer_v1_add_listener(fNativeState->lockedPointer, &lockListener, fNativeState.get());
+            zwp_relative_pointer_v1_add_listener(fNativeState->relativePointer, &relativeListener, fNativeState.get());
+        }
+        else if (wasActive)
+        {
+            applyClientCursor();
+        }
+        return Result::Success;
+    }
     void WindowBackendWayland::setDoubleClickMode(DoubleClickMode mode)
     {
         fDoubleClickMode = mode;
@@ -795,6 +878,8 @@ namespace LWS
     void WindowBackendWayland::handlePointerMotion(Point position, Point delta,
                                                    internal::WaylandSurfaceRole surfaceRole)
     {
+        if (fPointerLockActive)
+            return;
         fMousePosition = position;
         const internal::WaylandFrameHit hit = frameHit(position, surfaceRole);
         applyFrameCursor(hit);
@@ -804,6 +889,35 @@ namespace LWS
         position -= contentOffset();
         fMousePosition = position;
         dispatchEvent(EventMouseMove{position, delta});
+    }
+
+    void WindowBackendWayland::handlePointerLockState(bool active)
+    {
+        if (fPointerLockActive == active)
+            return;
+        fPointerLockActive = active;
+        fRelativeRemainderX = 0.0;
+        fRelativeRemainderY = 0.0;
+        if (fNativeState != nullptr)
+        {
+            if (active)
+                applyCursor(CursorShape::Arrow, false);
+            else
+                applyClientCursor();
+        }
+    }
+
+    void WindowBackendWayland::handleRelativePointerMotion(double deltaX, double deltaY)
+    {
+        if (!fPointerLockActive)
+            return;
+        fRelativeRemainderX += deltaX;
+        fRelativeRemainderY += deltaY;
+        const Point delta{static_cast<int32_t>(fRelativeRemainderX), static_cast<int32_t>(fRelativeRemainderY)};
+        fRelativeRemainderX -= delta.x;
+        fRelativeRemainderY -= delta.y;
+        if (delta != Point{})
+            dispatchEvent(EventMouseMove{fMousePosition, delta});
     }
 
     void WindowBackendWayland::handlePointerButton(MouseButton button, bool pressed, Point position,

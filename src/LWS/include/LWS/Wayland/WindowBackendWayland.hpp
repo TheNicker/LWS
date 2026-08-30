@@ -84,6 +84,7 @@ namespace LWS
         Point getMousePosition() const override;
         void setLockMouseToWindowMode(LockMouseToWindowMode mode) override;
         LockMouseToWindowMode getLockMouseToWindowMode() const override;
+        Result setPointerLocked(bool locked) override;
         void setDoubleClickMode(DoubleClickMode mode) override;
         DoubleClickMode getDoubleClickMode() const override;
         void setCursor(std::shared_ptr<ICursorBackend> cursor) override;
@@ -98,6 +99,8 @@ namespace LWS
         void handlePointerEnter(Point position, internal::WaylandSurfaceRole surfaceRole);
         void handlePointerLeave();
         void handlePointerMotion(Point position, Point delta, internal::WaylandSurfaceRole surfaceRole);
+        void handlePointerLockState(bool active);
+        void handleRelativePointerMotion(double deltaX, double deltaY);
         void handlePointerButton(MouseButton button, bool pressed, Point position,
                                  internal::WaylandSurfaceRole surfaceRole, uint32_t time);
         void handlePointerWheel(int32_t delta, Point position);
@@ -153,6 +156,10 @@ namespace LWS
         bool fFullScreen = false;
         bool fFocused = false;
         bool fMouseInside = false;
+        bool fPointerLockRequested = false;
+        bool fPointerLockActive = false;
+        double fRelativeRemainderX = 0.0;
+        double fRelativeRemainderY = 0.0;
         Point fMousePosition{};
         LLUtils::Color fBackgroundColor;
         WindowStyle fWindowStyles = WindowStyle::NoStyle;

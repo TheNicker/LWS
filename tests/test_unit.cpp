@@ -184,6 +184,12 @@ TEST_CASE("BackendId has expected Win32 value", "[backend]")
     REQUIRE(LWS::BackendId::Wayland != LWS::BackendId::Win32);
 }
 
+TEST_CASE("Mouse wheel events expose normalized steps", "[input]")
+{
+    REQUIRE((LWS::EventMouseWheel{120, {}}.steps() == 1.0));
+    REQUIRE((LWS::EventMouseWheel{-60, {}}.steps() == -0.5));
+}
+
 // ---------------------------------------------------------------------------
 // BitmapBuffer default
 // ---------------------------------------------------------------------------

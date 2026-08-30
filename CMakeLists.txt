@@ -40,6 +40,14 @@ elseif(UNIX)
         "${WAYLAND_PROTOCOLS_DIRECTORY}/unstable/xdg-decoration/xdg-decoration-unstable-v1.xml")
     set(LWS_XDG_DECORATION_HEADER "${LWS_WAYLAND_GENERATED_DIR}/xdg-decoration-client-protocol.h")
     set(LWS_XDG_DECORATION_SOURCE "${LWS_WAYLAND_GENERATED_DIR}/xdg-decoration-protocol.c")
+    set(LWS_RELATIVE_POINTER_XML
+        "${WAYLAND_PROTOCOLS_DIRECTORY}/unstable/relative-pointer/relative-pointer-unstable-v1.xml")
+    set(LWS_RELATIVE_POINTER_HEADER "${LWS_WAYLAND_GENERATED_DIR}/relative-pointer-client-protocol.h")
+    set(LWS_RELATIVE_POINTER_SOURCE "${LWS_WAYLAND_GENERATED_DIR}/relative-pointer-protocol.c")
+    set(LWS_POINTER_CONSTRAINTS_XML
+        "${WAYLAND_PROTOCOLS_DIRECTORY}/unstable/pointer-constraints/pointer-constraints-unstable-v1.xml")
+    set(LWS_POINTER_CONSTRAINTS_HEADER "${LWS_WAYLAND_GENERATED_DIR}/pointer-constraints-client-protocol.h")
+    set(LWS_POINTER_CONSTRAINTS_SOURCE "${LWS_WAYLAND_GENERATED_DIR}/pointer-constraints-protocol.c")
 
     add_custom_command(
         OUTPUT "${LWS_XDG_SHELL_HEADER}"
@@ -71,6 +79,24 @@ elseif(UNIX)
         DEPENDS "${LWS_XDG_DECORATION_XML}"
         VERBATIM
     )
+    foreach(protocol RELATIVE_POINTER POINTER_CONSTRAINTS)
+      add_custom_command(
+          OUTPUT "${LWS_${protocol}_HEADER}"
+          COMMAND "${CMAKE_COMMAND}" -E make_directory "${LWS_WAYLAND_GENERATED_DIR}"
+          COMMAND "${WAYLAND_SCANNER_EXECUTABLE}" client-header "${LWS_${protocol}_XML}"
+                  "${LWS_${protocol}_HEADER}"
+          DEPENDS "${LWS_${protocol}_XML}"
+          VERBATIM
+      )
+      add_custom_command(
+          OUTPUT "${LWS_${protocol}_SOURCE}"
+          COMMAND "${CMAKE_COMMAND}" -E make_directory "${LWS_WAYLAND_GENERATED_DIR}"
+          COMMAND "${WAYLAND_SCANNER_EXECUTABLE}" private-code "${LWS_${protocol}_XML}"
+                  "${LWS_${protocol}_SOURCE}"
+          DEPENDS "${LWS_${protocol}_XML}"
+          VERBATIM
+      )
+    endforeach()
   else()
     message(WARNING "Wayland not found — falling back to X11")
     find_package(X11 REQUIRED)
@@ -132,6 +158,10 @@ if(LWS_PLATFORM_WAYLAND)
       "${LWS_XDG_SHELL_SOURCE}"
       "${LWS_XDG_DECORATION_HEADER}"
       "${LWS_XDG_DECORATION_SOURCE}"
+      "${LWS_RELATIVE_POINTER_HEADER}"
+      "${LWS_RELATIVE_POINTER_SOURCE}"
+      "${LWS_POINTER_CONSTRAINTS_HEADER}"
+      "${LWS_POINTER_CONSTRAINTS_SOURCE}"
   )
   target_include_directories(LWSLib PRIVATE "${LWS_WAYLAND_GENERATED_DIR}")
   target_link_libraries(LWSLib PRIVATE Wayland::Client PkgConfig::CaptionText)

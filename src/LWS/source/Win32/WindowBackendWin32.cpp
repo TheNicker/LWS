@@ -666,6 +666,10 @@ namespace LWS
     {
         return fLockMode;
     }
+    Result WindowBackendWin32::setPointerLocked(bool)
+    {
+        return Result::NotSupported;
+    }
 
     void WindowBackendWin32::setDoubleClickMode(DoubleClickMode mode)
     {

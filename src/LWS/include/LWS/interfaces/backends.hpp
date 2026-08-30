@@ -152,6 +152,7 @@ namespace LWS
         virtual Point getMousePosition() const = 0;
         virtual void setLockMouseToWindowMode(LockMouseToWindowMode mode) = 0;
         virtual LockMouseToWindowMode getLockMouseToWindowMode() const = 0;
+        [[nodiscard]] virtual Result setPointerLocked(bool locked) = 0;
         virtual void setDoubleClickMode(DoubleClickMode mode) = 0;
         virtual DoubleClickMode getDoubleClickMode() const = 0;
         virtual void setCursor(std::shared_ptr<ICursorBackend> cursor) = 0;

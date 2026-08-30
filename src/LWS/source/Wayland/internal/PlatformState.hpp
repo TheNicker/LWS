@@ -17,6 +17,8 @@
     #include <wayland-client.h>
     #include <xdg-decoration-client-protocol.h>
     #include <xdg-shell-client-protocol.h>
+    #include <pointer-constraints-client-protocol.h>
+    #include <relative-pointer-client-protocol.h>
 
 namespace LWS
 {
@@ -52,6 +54,11 @@ namespace LWS::internal
         [[nodiscard]] wl_shm* sharedMemory() const { return fSharedMemory; }
         [[nodiscard]] xdg_wm_base* shell() const { return fShell; }
         [[nodiscard]] zxdg_decoration_manager_v1* decorationManager() const { return fDecorationManager; }
+        [[nodiscard]] zwp_pointer_constraints_v1* pointerConstraints() const { return fPointerConstraints; }
+        [[nodiscard]] zwp_relative_pointer_manager_v1* relativePointerManager() const
+        {
+            return fRelativePointerManager;
+        }
         [[nodiscard]] bool hasHostWindowFrame() const { return fHasHostWindowFrame; }
         [[nodiscard]] wl_pointer* pointer() const { return fPointer; }
         [[nodiscard]] wl_seat* seat() const { return fSeat; }
@@ -137,6 +144,8 @@ namespace LWS::internal
         wl_shm* fSharedMemory = nullptr;
         xdg_wm_base* fShell = nullptr;
         zxdg_decoration_manager_v1* fDecorationManager = nullptr;
+        zwp_pointer_constraints_v1* fPointerConstraints = nullptr;
+        zwp_relative_pointer_manager_v1* fRelativePointerManager = nullptr;
         wl_seat* fSeat = nullptr;
         wl_pointer* fPointer = nullptr;
         wl_keyboard* fKeyboard = nullptr;

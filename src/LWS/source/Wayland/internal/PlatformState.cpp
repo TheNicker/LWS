@@ -10,6 +10,7 @@
     #include <cerrno>
     #include <cstring>
     #include <poll.h>
+    #include <optional>
     #include <ranges>
     #include <sys/eventfd.h>
     #include <sys/timerfd.h>
@@ -18,7 +19,7 @@
 
 namespace
 {
-    LWS::MouseButton mouseButtonFromLinux(uint32_t button)
+    std::optional<LWS::MouseButton> mouseButtonFromLinux(uint32_t button)
     {
         using LWS::MouseButton;
         switch (button)
@@ -30,11 +31,13 @@ namespace
             case BTN_RIGHT:
                 return MouseButton::Right;
             case BTN_SIDE:
+            case BTN_BACK:
                 return MouseButton::X1;
             case BTN_EXTRA:
+            case BTN_FORWARD:
                 return MouseButton::X2;
             default:
-                return MouseButton::Left;
+                return std::nullopt;
         }
     }
 
@@ -268,6 +271,16 @@ namespace LWS::internal
             state.fDecorationManager = static_cast<zxdg_decoration_manager_v1*>(
                 wl_registry_bind(registry, name, &zxdg_decoration_manager_v1_interface, std::min(version, 1U)));
         }
+        else if (std::strcmp(interface, zwp_pointer_constraints_v1_interface.name) == 0)
+        {
+            state.fPointerConstraints = static_cast<zwp_pointer_constraints_v1*>(
+                wl_registry_bind(registry, name, &zwp_pointer_constraints_v1_interface, 1));
+        }
+        else if (std::strcmp(interface, zwp_relative_pointer_manager_v1_interface.name) == 0)
+        {
+            state.fRelativePointerManager = static_cast<zwp_relative_pointer_manager_v1*>(
+                wl_registry_bind(registry, name, &zwp_relative_pointer_manager_v1_interface, 1));
+        }
         else if (std::strcmp(interface, "weston_rdprail_shell") == 0)
         {
             state.fHasHostWindowFrame = true;
@@ -349,6 +362,8 @@ namespace LWS::internal
         }
         else if ((capabilities & WL_SEAT_CAPABILITY_POINTER) == 0 && state.fPointer != nullptr)
         {
+            if (state.fPointerWindow != nullptr)
+                std::ignore = state.fPointerWindow->setPointerLocked(false);
             wl_pointer_release(state.fPointer);
             state.fPointer = nullptr;
             state.fPointerWindow = nullptr;
@@ -430,10 +445,10 @@ namespace LWS::internal
     {
         auto& state = *static_cast<WaylandPlatformState*>(data);
         state.fPointerButtonSerial = serial;
-        if (state.fPointerWindow != nullptr)
+        const auto mouseButton = mouseButtonFromLinux(button);
+        if (state.fPointerWindow != nullptr && mouseButton.has_value())
         {
-            state.fPointerWindow->handlePointerButton(mouseButtonFromLinux(button),
-                                                      buttonState == WL_POINTER_BUTTON_STATE_PRESSED,
+            state.fPointerWindow->handlePointerButton(*mouseButton, buttonState == WL_POINTER_BUTTON_STATE_PRESSED,
                                                       state.fPointerPosition, state.fPointerSurfaceRole, time);
         }
     }
@@ -719,6 +734,10 @@ namespace LWS::internal
             xdg_wm_base_destroy(fShell);
         if (fDecorationManager != nullptr)
             zxdg_decoration_manager_v1_destroy(fDecorationManager);
+        if (fRelativePointerManager != nullptr)
+            zwp_relative_pointer_manager_v1_destroy(fRelativePointerManager);
+        if (fPointerConstraints != nullptr)
+            zwp_pointer_constraints_v1_destroy(fPointerConstraints);
         if (fSharedMemory != nullptr)
             wl_shm_destroy(fSharedMemory);
         if (fSubcompositor != nullptr)
@@ -738,6 +757,8 @@ namespace LWS::internal
         fSeat = nullptr;
         fShell = nullptr;
         fDecorationManager = nullptr;
+        fRelativePointerManager = nullptr;
+        fPointerConstraints = nullptr;
         fSharedMemory = nullptr;
         fSubcompositor = nullptr;
         fCompositor = nullptr;

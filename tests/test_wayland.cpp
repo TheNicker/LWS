@@ -13,6 +13,7 @@
     #include <LWS/source/Wayland/internal/WindowFrame.hpp>
 
     #include <thread>
+    #include <vector>
 
 namespace
 {
@@ -209,6 +210,50 @@ TEST_CASE("Wayland creates an xdg-shell window", "[wayland][window]")
     window.SetMinMaxSize({320, 200}, {1920, 1080});
     REQUIRE((window.GetMinSize() == LWS::Size{320, 200}));
     REQUIRE((window.GetMaxSize() == LWS::Size{1920, 1080}));
+}
+
+TEST_CASE("Wayland pointer lock follows compositor support", "[wayland][pointer]")
+{
+    PlatformSession platform;
+    if (platform.result != LWS::Result::Success)
+        SKIP("No Wayland compositor is available");
+
+    LWS::Window window;
+    REQUIRE(window.Create() == LWS::Result::Success);
+    if (!LWS::Platform::supports(LWS::Platform::Feature::PointerLock))
+    {
+        REQUIRE(window.SetPointerLocked(true) == LWS::Result::NotSupported);
+        return;
+    }
+
+    REQUIRE(window.SetPointerLocked(true) == LWS::Result::Success);
+    REQUIRE(window.SetPointerLocked(false) == LWS::Result::Success);
+}
+
+TEST_CASE("Wayland dispatches motion from the active pointer source", "[wayland][pointer]")
+{
+    LWS::WindowBackendWayland backend;
+    std::vector<LWS::EventMouseMove> motions;
+    std::ignore = backend.addListener(
+        [&](const LWS::AnyEvent& event)
+        {
+            if (const auto* motion = std::get_if<LWS::EventMouseMove>(&event))
+                motions.push_back(*motion);
+            return true;
+        });
+
+    backend.handlePointerMotion({3, 4}, {3, 4}, LWS::internal::WaylandSurfaceRole::Content);
+    backend.handlePointerLockState(true);
+    backend.handlePointerMotion({5, 6}, {2, 2}, LWS::internal::WaylandSurfaceRole::Content);
+    backend.handleRelativePointerMotion(0.5, 0.5);
+    backend.handleRelativePointerMotion(0.75, 0.75);
+    backend.handlePointerLockState(false);
+    backend.handlePointerMotion({7, 8}, {2, 2}, LWS::internal::WaylandSurfaceRole::Content);
+
+    REQUIRE(motions.size() == 3);
+    REQUIRE((motions[0].delta == LWS::Point{3, 4}));
+    REQUIRE((motions[1].delta == LWS::Point{1, 1}));
+    REQUIRE((motions[2].delta == LWS::Point{2, 2}));
 }
 
 TEST_CASE("Wayland caption double-click toggles maximized state", "[wayland][window][caption]")
