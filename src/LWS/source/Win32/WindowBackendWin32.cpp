@@ -534,7 +534,8 @@ namespace LWS
 
         internal::WindowPosHelper::setPlacement(fHwnd, placement.position.x, placement.position.y, placement.size.x,
                                                 placement.size.y);
-        setDisplayState(placement.displayState);
+        if (placement.displayState != fDisplayState)
+            setDisplayState(placement.displayState);
     }
 
     WindowPlacement WindowBackendWin32::getPlacement() const
