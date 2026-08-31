@@ -24,17 +24,21 @@ namespace
     {
       public:
 
-        explicit LifetimeCursorBackend(bool& destroyed) : fDestroyed(destroyed) {}
+        explicit LifetimeCursorBackend(bool& destroyed, LWS::Result customCursorResult = LWS::Result::Success)
+            : fDestroyed(destroyed), fCustomCursorResult(customCursorResult)
+        {
+        }
         ~LifetimeCursorBackend() override { fDestroyed = true; }
 
         void setVisible(bool) override {}
         void setCursorShape(LWS::CursorShape) override {}
-        void setCustomCursor(const LWS::BitmapBuffer&) override {}
+        [[nodiscard]] LWS::Result setCustomCursor(const LWS::BitmapBuffer&) override { return fCustomCursorResult; }
         LWS::BackendId backend() const override { return LWS::BackendId::Undefined; }
 
       private:
 
         bool& fDestroyed;
+        LWS::Result fCustomCursorResult;
     };
 }  // namespace
 
@@ -85,6 +89,13 @@ TEST_CASE("Window cursor backend remains alive while a window retains it", "[cur
     REQUIRE_FALSE(destroyed);
     retainedBackend.reset();
     REQUIRE(destroyed);
+}
+
+TEST_CASE("Cursor forwards custom bitmap failures", "[cursor][bitmap]")
+{
+    bool destroyed = false;
+    LWS::Cursor cursor(std::make_unique<LifetimeCursorBackend>(destroyed, LWS::Result::Failure));
+    REQUIRE(cursor.setCustomCursor({}) == LWS::Result::Failure);
 }
 
 // ---------------------------------------------------------------------------

@@ -11,6 +11,7 @@
     #include <LWS/Platform.hpp>
     #include <LWS/Bitmap.hpp>
     #include <LWS/Clipboard.hpp>
+    #include <LWS/Cursor.hpp>
     #include <LWS/Timer.hpp>
     #include <LWS/Window.hpp>
     #include <LLUtils/Exception.h>
@@ -535,9 +536,35 @@ TEST_CASE("processMessages returns false when no WM_QUIT is pending", "[platform
     LWS::Platform::shutdown();
 }
 
+TEST_CASE("Custom cursor rejects an invalid bitmap layout", "[cursor][bitmap][win32]")
+{
+    const std::array<std::byte, 4> pixels{};
+    LWS::Cursor cursor;
+    REQUIRE(cursor.setCustomCursor({
+                .pixels = pixels,
+                .format = LWS::BitmapPixelFormat::Bgra8,
+                .width = 2,
+                .height = 2,
+                .rowPitch = 8,
+            }) == LWS::Result::Failure);
+}
+
+TEST_CASE("Custom cursor accepts straight-alpha pixels", "[cursor][bitmap][win32]")
+{
+    const std::array pixels{std::byte{255}, std::byte{0}, std::byte{0}, std::byte{128}};
+    LWS::Cursor cursor;
+    REQUIRE(cursor.setCustomCursor({
+                .pixels = pixels,
+                .format = LWS::BitmapPixelFormat::Bgra8,
+                .width = 1,
+                .height = 1,
+                .rowPitch = 4,
+            }) == LWS::Result::Success);
+}
+
 TEST_CASE("Clipboard rejects writes without an owner window", "[clipboard][win32]")
 {
-    const std::array data{ std::byte{} };
+    const std::array data{std::byte{}};
     LWS::Clipboard clipboard;
     REQUIRE(clipboard.SetClipboardData(0, CF_TEXT, data.data(), data.size()) == LWS::ClipboardResult::UnknownError);
 }

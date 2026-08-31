@@ -113,7 +113,7 @@ namespace LWS
         virtual ~ICursorBackend() = default;
         virtual void setVisible(bool visible) = 0;
         virtual void setCursorShape(CursorShape shape) = 0;
-        virtual void setCustomCursor(const BitmapBuffer& bmp) = 0;
+        [[nodiscard]] virtual Result setCustomCursor(const BitmapBuffer& bmp) = 0;
         virtual BackendId backend() const = 0;
     };
 

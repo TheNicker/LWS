@@ -81,7 +81,7 @@ namespace LWS
         SetCursor(getCursorHandle());
     }
 
-    void CursorBackendWin32::setCustomCursor(const BitmapBuffer& bmp)
+    Result CursorBackendWin32::setCustomCursor(const BitmapBuffer& bmp)
     {
         const auto layout = internal::validateBitmapBuffer(bmp);
         if (!layout.has_value() ||
@@ -89,7 +89,7 @@ namespace LWS
             bmp.width > static_cast<uint32_t>(std::numeric_limits<LONG>::max()) ||
             bmp.height > static_cast<uint32_t>(std::numeric_limits<LONG>::max()))
         {
-            return;
+            return Result::Failure;
         }
 
         const size_t dest_row_pitch = static_cast<size_t>(bmp.width) * 4U;
@@ -119,7 +119,7 @@ namespace LWS
             {
                 DeleteObject(color_bitmap);
             }
-            return;
+            return Result::Failure;
         }
 
         const std::byte* source = bmp.pixels.data();
@@ -155,7 +155,7 @@ namespace LWS
         if (mask_bitmap == nullptr)
         {
             DeleteObject(color_bitmap);
-            return;
+            return Result::Failure;
         }
 
         ICONINFO icon_info{};
@@ -171,7 +171,7 @@ namespace LWS
 
         if (custom_cursor == nullptr)
         {
-            return;
+            return Result::Failure;
         }
 
         if (fCustomCursor != nullptr)
@@ -181,6 +181,7 @@ namespace LWS
 
         fCustomCursor = custom_cursor;
         SetCursor(getCursorHandle());
+        return Result::Success;
     }
 
     BackendId CursorBackendWin32::backend() const
