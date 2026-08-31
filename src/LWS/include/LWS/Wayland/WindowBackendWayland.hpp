@@ -93,6 +93,7 @@ namespace LWS
         EventListenerToken addListener(EventCallback cb) override;
         void removeListener(EventListenerToken token) override;
         void injectRawEvent(void* platformEvent) override;
+        Result presentBitmap(const BitmapBuffer& bitmap) override;
         Handle getHandle() const override;
         BackendId backend() const override { return BackendId::Wayland; }
 
@@ -117,6 +118,7 @@ namespace LWS
         std::unique_ptr<NativeState> fNativeState;
         std::shared_ptr<ICursorBackend> fCursor;
         WindowBackendWayland* fParentBackend = nullptr;
+        std::vector<WindowBackendWayland*> fChildBackends;
 
         bool dispatchEvent(const AnyEvent& event);
         void applyCursor(CursorShape shape, bool visible);
@@ -125,14 +127,18 @@ namespace LWS
         [[nodiscard]] bool beginResize(internal::WaylandResizeEdge edge);
         [[nodiscard]] bool canResize() const;
         [[nodiscard]] internal::WaylandCaptionMode captionMode() const;
+        [[nodiscard]] Result createSubsurface(NativeState& nativeState);
         [[nodiscard]] Point contentOffset() const;
         [[nodiscard]] internal::WaylandDecorationMode decorationMode() const;
         [[nodiscard]] internal::WaylandFrameHit frameHit(Point position,
                                                          internal::WaylandSurfaceRole surfaceRole) const;
         [[nodiscard]] bool isChildWindow() const;
         void paintBackground();
+        void presentPendingBitmap();
         void paintCaption();
+        void updateChildInputRegions();
         void updateWindowGeometry();
+        void updateSubsurfaceInputRegion();
         void updateSubsurfacePosition();
         [[nodiscard]] bool showsClientSideDecorations() const;
         [[nodiscard]] bool showsDetachedCaption() const;

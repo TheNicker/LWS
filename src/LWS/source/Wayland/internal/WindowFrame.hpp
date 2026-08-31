@@ -91,6 +91,20 @@ namespace LWS::internal
                (std::to_underlying(styles) & std::to_underlying(WindowStyle::ResizableBorder)) != 0;
     }
 
+    [[nodiscard]] constexpr Rect waylandChildInputRect(Point position, Size childSize, Size parentSize,
+                                                       bool preserveParentResizeFrame)
+    {
+        const int32_t width = std::max(childSize.x, 0);
+        const int32_t height = std::max(childSize.y, 0);
+        if (!preserveParentResizeFrame)
+            return {{0, 0}, {width, height}};
+
+        const int32_t left = std::clamp(waylandResizeBorderWidth - position.x, 0, width);
+        const int32_t right = std::clamp(parentSize.x - waylandResizeBorderWidth - position.x, left, width);
+        const int32_t bottom = std::clamp(parentSize.y - waylandResizeBorderWidth - position.y, 0, height);
+        return {{left, 0}, {right, bottom}};
+    }
+
     [[nodiscard]] constexpr WaylandFrameHit waylandFrameHit(Point position, Size surfaceSize,
                                                             const WaylandFrameConfig& config)
     {

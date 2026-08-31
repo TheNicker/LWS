@@ -1,5 +1,6 @@
 #include <LWS/Wayland/WindowBackendWayland.hpp>
 #include <LWS/Wayland/CursorBackendWayland.hpp>
+#include <LWS/source/internal/BitmapValidation.hpp>
 
 #ifdef LWS_PLATFORM_WAYLAND
 
@@ -10,6 +11,7 @@
     #include <algorithm>
     #include <cerrno>
     #include <cstdint>
+    #include <cstring>
     #include <limits>
     #include <optional>
     #include <sys/mman.h>
@@ -63,6 +65,38 @@ namespace LWS
             wl_buffer* buffer = nullptr;
             void* mapping = MAP_FAILED;
             size_t mappingSize = 0;
+        };
+
+        struct PresentedBuffer
+        {
+            explicit PresentedBuffer(NativeState& state) : owner(state) {}
+            ~PresentedBuffer()
+            {
+                if (buffer != nullptr)
+                    wl_buffer_destroy(buffer);
+                if (mapping != MAP_FAILED)
+                    munmap(mapping, mappingSize);
+            }
+            static void released(void* data, wl_buffer*)
+            {
+                auto* presented = static_cast<PresentedBuffer*>(data);
+                presented->owner.releasePresentedBuffer(presented);
+            }
+
+            NativeState& owner;
+            wl_buffer* buffer = nullptr;
+            void* mapping = MAP_FAILED;
+            size_t mappingSize = 0;
+            uint32_t width = 0;
+            uint32_t height = 0;
+            bool busy = false;
+        };
+
+        struct PendingBitmap
+        {
+            std::vector<std::byte> pixels;
+            uint32_t width = 0;
+            uint32_t height = 0;
         };
 
         struct ToplevelConfigure
@@ -129,6 +163,13 @@ namespace LWS
                           [releasedBuffer](const auto& buffer) { return buffer.get() == releasedBuffer; });
         }
 
+        void releasePresentedBuffer(PresentedBuffer* releasedBuffer)
+        {
+            releasedBuffer->busy = false;
+            if (pendingBitmap.has_value())
+                owner.presentPendingBitmap();
+        }
+
         static void surfaceConfigure(void* data, xdg_surface* surface, uint32_t serial)
         {
             auto& state = *static_cast<NativeState*>(data);
@@ -187,6 +228,7 @@ namespace LWS
             state.owner.updateWindowGeometry();
             state.owner.paintBackground();
             state.owner.paintCaption();
+            state.owner.updateChildInputRegions();
         }
 
         static void bufferRelease(void* data, wl_buffer*)
@@ -217,9 +259,12 @@ namespace LWS
         bool configured = false;
         bool bufferReleased = true;
         bool repaintPending = false;
+        std::optional<PendingBitmap> pendingBitmap;
         std::optional<ToplevelConfigure> pendingToplevelConfigure;
         std::vector<std::unique_ptr<CaptionBuffer>> captionBuffers;
+        std::vector<std::unique_ptr<PresentedBuffer>> presentedBuffers;
         std::optional<CursorShape> frameCursorShape;
+        std::optional<Rect> inputRect;
         int32_t captionWidth = 0;
     };
 
@@ -266,21 +311,12 @@ namespace LWS
 
         if (isChildWindow())
         {
-            if (platform.subcompositor() == nullptr || fParentBackend == nullptr ||
-                fParentBackend->fNativeState == nullptr)
+            const Result result = createSubsurface(*native);
+            if (result != Result::Success)
             {
                 wl_surface_destroy(native->surface);
-                return platform.subcompositor() == nullptr ? Result::NotSupported : Result::InvalidState;
+                return result;
             }
-            native->subsurface = wl_subcompositor_get_subsurface(platform.subcompositor(), native->surface,
-                                                                 fParentBackend->fNativeState->surface);
-            if (native->subsurface == nullptr)
-            {
-                wl_surface_destroy(native->surface);
-                return Result::Failure;
-            }
-            wl_subsurface_set_desync(native->subsurface);
-            native->configured = true;
         }
         else
         {
@@ -354,6 +390,7 @@ namespace LWS
         if (isChildWindow())
         {
             updateSubsurfacePosition();
+            updateSubsurfaceInputRegion();
             if (fVisible)
             {
                 if (fEraseBackground)
@@ -378,6 +415,15 @@ namespace LWS
 
     void WindowBackendWayland::destroy()
     {
+        if (fParentBackend != nullptr)
+        {
+            std::erase(fParentBackend->fChildBackends, this);
+            fParentBackend = nullptr;
+        }
+        for (WindowBackendWayland* child : fChildBackends)
+            child->fParentBackend = nullptr;
+        fChildBackends.clear();
+
         if (fNativeState == nullptr)
         {
             return;
@@ -413,6 +459,14 @@ namespace LWS
     {
         if (fNativeState != nullptr && !fVisible)
         {
+            if (isChildWindow() && fNativeState->subsurface == nullptr)
+            {
+                if (createSubsurface(*fNativeState) != Result::Success)
+                    return;
+                fNativeState->inputRect.reset();
+                updateSubsurfacePosition();
+                updateSubsurfaceInputRegion();
+            }
             fVisible = true;
             updateWindowGeometry();
             if (fNativeState->configured)
@@ -435,12 +489,32 @@ namespace LWS
         if (fNativeState != nullptr && fVisible)
         {
             fVisible = false;
+            fNativeState->pendingBitmap.reset();
             wl_surface_attach(fNativeState->surface, nullptr, 0, 0);
             wl_surface_commit(fNativeState->surface);
             if (fNativeState->captionSurface != nullptr)
             {
                 wl_surface_attach(fNativeState->captionSurface, nullptr, 0, 0);
                 wl_surface_commit(fNativeState->captionSurface);
+            }
+            if (fNativeState->subsurface != nullptr && internal::WaylandPlatformState::current().hasHostWindowFrame())
+            {
+                auto& platform = internal::WaylandPlatformState::current();
+                wl_surface* replacementSurface = wl_compositor_create_surface(platform.compositor());
+                if (replacementSurface == nullptr)
+                    return;
+
+                // WSLg's RDPRAIL shell keeps a detached subsurface visible and hit-testable after a null-buffer
+                // commit. Replacing the child wl_surface removes that host surface; ordinary compositors keep the
+                // stable surface and use the standard unmap path above.
+                wl_subsurface_destroy(fNativeState->subsurface);
+                fNativeState->subsurface = nullptr;
+                platform.unregisterWindow(fNativeState->surface);
+                wl_surface_destroy(fNativeState->surface);
+                fNativeState->surface = replacementSurface;
+                fWlSurface = replacementSurface;
+                platform.registerWindow(replacementSurface, *this);
+                fNativeState->inputRect.reset();
             }
             if (!isChildWindow())
                 fNativeState->configured = false;
@@ -460,6 +534,7 @@ namespace LWS
             fRestoredClientSize = fSize;
         }
         fDisplayState = state;
+        updateChildInputRegions();
         if (fNativeState == nullptr || fNativeState->toplevel == nullptr)
         {
             return;
@@ -507,6 +582,7 @@ namespace LWS
         {
             fPosition = position;
             updateSubsurfacePosition();
+            updateSubsurfaceInputRegion();
         }
     }
     Point WindowBackendWayland::getPosition() const
@@ -519,9 +595,15 @@ namespace LWS
         if (size.x > 0 && size.y > 0 && size != fSize)
         {
             fSize = size;
+            if (fNativeState != nullptr)
+                fNativeState->pendingBitmap.reset();
             updateWindowGeometry();
+            updateSubsurfaceInputRegion();
             paintBackground();
             paintCaption();
+            if (fNativeState != nullptr)
+                dispatchEvent(EventResize{fSize});
+            updateChildInputRegions();
         }
     }
 
@@ -540,9 +622,18 @@ namespace LWS
 
     void WindowBackendWayland::setPlacement(const WindowPlacement& placement)
     {
-        setPosition(placement.position);
+        const bool positionChanged = isChildWindow() && placement.position != fPosition;
+        const bool sizeChanged = placement.size.x > 0 && placement.size.y > 0 && placement.size != fSize;
+        if (positionChanged)
+        {
+            fPosition = placement.position;
+            updateSubsurfacePosition();
+        }
         setSize(placement.size);
-        setDisplayState(placement.displayState);
+        if (positionChanged && !sizeChanged)
+            updateSubsurfaceInputRegion();
+        if (placement.displayState != fDisplayState)
+            setDisplayState(placement.displayState);
     }
 
     WindowPlacement WindowBackendWayland::getPlacement() const
@@ -575,6 +666,7 @@ namespace LWS
         const auto current = std::to_underlying(fWindowStyles);
         fWindowStyles = static_cast<WindowStyle>(enable ? current | std::to_underlying(styles)
                                                         : current & ~std::to_underlying(styles));
+        updateChildInputRegions();
         if (fNativeState != nullptr && fNativeState->decoration != nullptr)
         {
             const bool wantsCaption = (std::to_underlying(fWindowStyles) & std::to_underlying(WindowStyle::Caption)) !=
@@ -691,6 +783,7 @@ namespace LWS
             dispatchEvent(EventDisplayStateChanged{displayState});
         if (fSize != previousSize)
             dispatchEvent(EventResize{fSize});
+        updateChildInputRegions();
     }
 
     void WindowBackendWayland::setFullScreenState(FullScreenState state)
@@ -700,6 +793,7 @@ namespace LWS
             fRestoredClientSize = fSize;
         fFullScreenState = state;
         fFullScreen = fullscreen;
+        updateChildInputRegions();
         updateWindowGeometry();
         if (fNativeState != nullptr && fNativeState->toplevel != nullptr)
         {
@@ -820,7 +914,11 @@ namespace LWS
 
     void WindowBackendWayland::setParent(IWindowBackend* parent)
     {
+        if (fParentBackend != nullptr)
+            std::erase(fParentBackend->fChildBackends, this);
         fParentBackend = dynamic_cast<WindowBackendWayland*>(parent);
+        if (fParentBackend != nullptr)
+            fParentBackend->fChildBackends.push_back(this);
         if (fNativeState != nullptr && fNativeState->toplevel != nullptr)
         {
             xdg_toplevel_set_parent(fNativeState->toplevel,
@@ -828,6 +926,8 @@ namespace LWS
                                         ? fParentBackend->fNativeState->toplevel
                                         : nullptr);
         }
+        updateSubsurfacePosition();
+        updateSubsurfaceInputRegion();
     }
 
     Result WindowBackendWayland::enableDragAndDrop(bool)
@@ -850,6 +950,121 @@ namespace LWS
     void WindowBackendWayland::injectRawEvent(void* platformEvent)
     {
         dispatchEvent(EventRawPlatform{std::to_underlying(BackendId::Wayland), platformEvent});
+    }
+
+    Result WindowBackendWayland::presentBitmap(const BitmapBuffer& bitmap)
+    {
+        if (fNativeState == nullptr)
+            return Result::NotCreated;
+        if (!fVisible || !fNativeState->configured)
+            return Result::InvalidState;
+        if (fSize.x <= 0 || fSize.y <= 0 || fSize.x > std::numeric_limits<int32_t>::max() / 4)
+            return Result::Failure;
+        const auto layout = internal::validateBitmapBuffer(bitmap);
+        const size_t tightPitch = static_cast<size_t>(fSize.x) * 4U;
+        if (!layout.has_value() || bitmap.format != BitmapPixelFormat::Bgra8Premultiplied ||
+            bitmap.rowOrder != BitmapRowOrder::TopDown || bitmap.width != static_cast<uint32_t>(fSize.x) ||
+            bitmap.height != static_cast<uint32_t>(fSize.y) || layout->rowPitch != tightPitch)
+        {
+            return Result::Failure;
+        }
+
+        const size_t bufferSize = tightPitch * bitmap.height;
+        auto& presentedBuffers = fNativeState->presentedBuffers;
+        std::erase_if(
+            presentedBuffers, [&](const auto& presented)
+            { return !presented->busy && (presented->width != bitmap.width || presented->height != bitmap.height); });
+        const auto available = std::ranges::find_if(presentedBuffers,
+                                                    [](const auto& presented) { return !presented->busy; });
+
+        // Bound compositor-owned buffers and coalesce later paints until one is released.
+        constexpr size_t maxPresentedBuffers = 3;
+        if (available == presentedBuffers.end() && presentedBuffers.size() >= maxPresentedBuffers)
+        {
+            auto& pending = fNativeState->pendingBitmap;
+            if (!pending.has_value() || pending->pixels.size() != bufferSize)
+                pending.emplace(NativeState::PendingBitmap{.pixels = std::vector<std::byte>(bufferSize)});
+            pending->width = bitmap.width;
+            pending->height = bitmap.height;
+            std::memcpy(pending->pixels.data(), bitmap.pixels.data(), bufferSize);
+            return Result::Success;
+        }
+
+        NativeState::PresentedBuffer* presented = nullptr;
+        if (available != presentedBuffers.end())
+        {
+            presented = available->get();
+        }
+        else
+        {
+            const int fd = createAnonymousFile();
+            if (fd < 0 || bufferSize > static_cast<size_t>(std::numeric_limits<off_t>::max()) ||
+                bufferSize > static_cast<size_t>(std::numeric_limits<int32_t>::max()) ||
+                ftruncate(fd, static_cast<off_t>(bufferSize)) != 0)
+            {
+                if (fd >= 0)
+                    close(fd);
+                return Result::Failure;
+            }
+
+            void* mapping = mmap(nullptr, bufferSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+            if (mapping == MAP_FAILED)
+            {
+                close(fd);
+                return Result::Failure;
+            }
+
+            wl_shm_pool* pool = wl_shm_create_pool(internal::WaylandPlatformState::current().sharedMemory(), fd,
+                                                   static_cast<int32_t>(bufferSize));
+            wl_buffer* buffer = pool != nullptr ? wl_shm_pool_create_buffer(pool, 0, fSize.x, fSize.y,
+                                                                            static_cast<int32_t>(tightPitch),
+                                                                            WL_SHM_FORMAT_ARGB8888)
+                                                : nullptr;
+            if (pool != nullptr)
+                wl_shm_pool_destroy(pool);
+            close(fd);
+            if (buffer == nullptr)
+            {
+                munmap(mapping, bufferSize);
+                return Result::Failure;
+            }
+
+            auto newPresented = std::make_unique<NativeState::PresentedBuffer>(*fNativeState);
+            newPresented->buffer = buffer;
+            newPresented->mapping = mapping;
+            newPresented->mappingSize = bufferSize;
+            newPresented->width = bitmap.width;
+            newPresented->height = bitmap.height;
+            static constexpr wl_buffer_listener bufferListener{.release = NativeState::PresentedBuffer::released};
+            wl_buffer_add_listener(buffer, &bufferListener, newPresented.get());
+            presented = newPresented.get();
+            presentedBuffers.push_back(std::move(newPresented));
+        }
+
+        std::memcpy(presented->mapping, bitmap.pixels.data(), bufferSize);
+        presented->busy = true;
+        wl_surface_attach(fNativeState->surface, presented->buffer, 0, 0);
+        if (wl_surface_get_version(fNativeState->surface) >= WL_SURFACE_DAMAGE_BUFFER_SINCE_VERSION)
+            wl_surface_damage_buffer(fNativeState->surface, 0, 0, fSize.x, fSize.y);
+        else
+            wl_surface_damage(fNativeState->surface, 0, 0, fSize.x, fSize.y);
+        wl_surface_commit(fNativeState->surface);
+        return Result::Success;
+    }
+
+    void WindowBackendWayland::presentPendingBitmap()
+    {
+        NativeState::PendingBitmap pending = std::move(*fNativeState->pendingBitmap);
+        fNativeState->pendingBitmap.reset();
+        const BitmapBuffer bitmap{
+            .pixels = pending.pixels,
+            .format = BitmapPixelFormat::Bgra8Premultiplied,
+            .rowOrder = BitmapRowOrder::TopDown,
+            .width = pending.width,
+            .height = pending.height,
+            .rowPitch = 0,
+        };
+        std::ignore = presentBitmap(bitmap);
     }
 
     Handle WindowBackendWayland::getHandle() const
@@ -1111,6 +1326,23 @@ namespace LWS
                internal::isWaylandResizeEnabled(fWindowStyles, fDisplayState, fFullScreen, isChildWindow());
     }
 
+    Result WindowBackendWayland::createSubsurface(NativeState& nativeState)
+    {
+        auto& platform = internal::WaylandPlatformState::current();
+        if (platform.subcompositor() == nullptr)
+            return Result::NotSupported;
+        if (fParentBackend == nullptr || fParentBackend->fNativeState == nullptr)
+            return Result::InvalidState;
+
+        nativeState.subsurface = wl_subcompositor_get_subsurface(platform.subcompositor(), nativeState.surface,
+                                                                 fParentBackend->fNativeState->surface);
+        if (nativeState.subsurface == nullptr)
+            return Result::Failure;
+        wl_subsurface_set_desync(nativeState.subsurface);
+        nativeState.configured = true;
+        return Result::Success;
+    }
+
     Point WindowBackendWayland::contentOffset() const
     {
         return {0, showsClientSideDecorations() ? internal::waylandCaptionHeight : 0};
@@ -1158,8 +1390,6 @@ namespace LWS
 
     bool WindowBackendWayland::isChildWindow() const
     {
-        if (fNativeState != nullptr)
-            return fNativeState->subsurface != nullptr;
         return (std::to_underlying(fWindowStyles) & std::to_underlying(WindowStyle::ChildWindow)) != 0;
     }
 
@@ -1171,6 +1401,43 @@ namespace LWS
             wl_subsurface_set_position(fNativeState->subsurface, fPosition.x + parentOffset.x,
                                        fPosition.y + parentOffset.y);
         }
+    }
+
+    void WindowBackendWayland::updateSubsurfaceInputRegion()
+    {
+        if (fNativeState == nullptr || fNativeState->subsurface == nullptr)
+            return;
+
+        // Subsurfaces otherwise consume pointer events over client-side frame edges. Restrict only their input
+        // region so the parent can start a resize without shrinking or clipping the child visually.
+        const bool preserveParentResizeFrame = fParentBackend != nullptr && fParentBackend->canResize() &&
+                                               (fParentBackend->showsClientSideDecorations() ||
+                                                fParentBackend->showsDetachedCaption());
+        const Size parentSize = fParentBackend != nullptr ? fParentBackend->fSize : Size{};
+        const Rect inputRect = internal::waylandChildInputRect(fPosition, fSize, parentSize, preserveParentResizeFrame);
+        const Point topLeft = inputRect.GetCorner(LLUtils::TopLeft);
+        const Point bottomRight = inputRect.GetCorner(LLUtils::BottomRight);
+        if (fNativeState->inputRect.has_value() && fNativeState->inputRect->GetCorner(LLUtils::TopLeft) == topLeft &&
+            fNativeState->inputRect->GetCorner(LLUtils::BottomRight) == bottomRight)
+        {
+            return;
+        }
+
+        wl_region* region = wl_compositor_create_region(internal::WaylandPlatformState::current().compositor());
+        if (region == nullptr)
+            return;
+        if (!inputRect.IsEmpty())
+            wl_region_add(region, topLeft.x, topLeft.y, inputRect.GetWidth(), inputRect.GetHeight());
+        wl_surface_set_input_region(fNativeState->surface, region);
+        wl_region_destroy(region);
+        wl_surface_commit(fNativeState->surface);
+        fNativeState->inputRect = inputRect;
+    }
+
+    void WindowBackendWayland::updateChildInputRegions()
+    {
+        for (WindowBackendWayland* child : fChildBackends)
+            child->updateSubsurfaceInputRegion();
     }
 
     bool WindowBackendWayland::showsClientSideDecorations() const

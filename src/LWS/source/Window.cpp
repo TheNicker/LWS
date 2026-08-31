@@ -171,6 +171,10 @@ namespace LWS
     void Window::RemoveEventListener(EventListenerToken token) { impl_->removeListener(token); }
     EventListenerGuard Window::MakeListenerGuard(EventListenerToken token) { return { this, token }; }
     void Window::InjectRawEvent(void* platform_event) { impl_->injectRawEvent(platform_event); }
+    Result Window::PresentBitmap(const BitmapBuffer& bitmap)
+    {
+        return impl_->presentBitmap(bitmap);
+    }
     BackendId Window::GetBackendId() const { return impl_->backend(); }
     Handle Window::GetHandle() const { return impl_->getHandle(); }
 

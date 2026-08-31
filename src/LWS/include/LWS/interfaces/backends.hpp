@@ -175,6 +175,7 @@ namespace LWS
         [[nodiscard]] virtual EventListenerToken addListener(EventCallback cb) = 0;
         virtual void removeListener(EventListenerToken token) = 0;
         virtual void injectRawEvent(void* platformEvent) = 0;
+        [[nodiscard]] virtual Result presentBitmap(const BitmapBuffer&) { return Result::NotSupported; }
         [[nodiscard]] virtual Handle getHandle() const = 0;
         [[nodiscard]] virtual BackendId backend() const = 0;
     };

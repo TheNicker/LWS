@@ -12,6 +12,7 @@
     #include <LWS/source/Wayland/internal/CaptionRenderer.hpp>
     #include <LWS/source/Wayland/internal/WindowFrame.hpp>
 
+    #include <array>
     #include <thread>
     #include <vector>
 
@@ -70,6 +71,7 @@ TEST_CASE("Wayland cursor state can be configured before platform initialization
     cursor.setCursorShape(LWS::CursorShape::SizeEW);
     cursor.setVisible(false);
     cursor.setVisible(true);
+    REQUIRE(cursor.setCustomCursor({}) == LWS::Result::NotSupported);
 }
 
 TEST_CASE("Wayland frame gives caption controls priority over resize edges", "[wayland][window][frame]")
@@ -97,6 +99,23 @@ TEST_CASE("Wayland frame gives caption controls priority over resize edges", "[w
     REQUIRE(waylandFrameHit({799, 16}, size, captionOnly) == LWS::internal::WaylandFrameHit{Resize, Right});
     captionOnly.resizeEnabled = false;
     REQUIRE(waylandFrameHit({799, 16}, size, captionOnly).action == Move);
+}
+
+TEST_CASE("Wayland child input preserves its parent resize frame", "[wayland][window][frame]")
+{
+    using LWS::internal::waylandChildInputRect;
+
+    const LWS::Rect sidebar = waylandChildInputRect({600, 0}, {200, 480}, {800, 480}, true);
+    REQUIRE((sidebar.GetCorner(LLUtils::TopLeft) == LWS::Point{0, 0}));
+    REQUIRE((sidebar.GetCorner(LLUtils::BottomRight) == LWS::Point{192, 472}));
+
+    const LWS::Rect canvas = waylandChildInputRect({0, 0}, {600, 480}, {800, 480}, true);
+    REQUIRE((canvas.GetCorner(LLUtils::TopLeft) == LWS::Point{8, 0}));
+    REQUIRE((canvas.GetCorner(LLUtils::BottomRight) == LWS::Point{600, 472}));
+
+    const LWS::Rect unframed = waylandChildInputRect({600, 0}, {200, 480}, {800, 480}, false);
+    REQUIRE((unframed.GetCorner(LLUtils::TopLeft) == LWS::Point{0, 0}));
+    REQUIRE((unframed.GetCorner(LLUtils::BottomRight) == LWS::Point{200, 480}));
 }
 
 TEST_CASE("Wayland caption renderer draws and clips the title", "[wayland][window][caption]")
@@ -350,19 +369,20 @@ TEST_CASE("Wayland embeds child windows as independently painted subsurfaces", "
     parentConfig.styles = LWS::WindowStyle::Caption | LWS::WindowStyle::CloseButton;
     REQUIRE(parent.Create(parentConfig) == LWS::Result::Success);
 
-    bool painted = false;
+    int paintEvents = 0;
     LWS::Window child;
     child.SetParent(&parent);
     std::ignore = child.AddEventListener(
         [&](const LWS::AnyEvent& event)
         {
-            painted |= std::holds_alternative<LWS::EventPaint>(event);
+            paintEvents += std::holds_alternative<LWS::EventPaint>(event) ? 1 : 0;
             return true;
         });
     const LWS::WindowConfig childConfig{
         .position = {7, 11},
         .size = {320, 200},
         .styles = LWS::WindowStyle::ChildWindow,
+        .eraseBackground = false,
     };
     REQUIRE(child.Create(childConfig) == LWS::Result::Success);
     REQUIRE(child.GetParent() == &parent);
@@ -372,7 +392,54 @@ TEST_CASE("Wayland embeds child windows as independently painted subsurfaces", "
     child.SetPosition({13, 17});
     child.SetVisible(true);
     REQUIRE((child.GetPosition() == LWS::Point{13, 17}));
-    REQUIRE(painted);
+    REQUIRE(paintEvents == 1);
+
+    child.SetVisible(false);
+    REQUIRE_FALSE(child.GetVisible());
+    child.SetVisible(true);
+    REQUIRE(child.GetVisible());
+    REQUIRE(paintEvents == 2);
+}
+
+TEST_CASE("Wayland dispatches resize events for programmatic child sizes", "[wayland][window][child]")
+{
+    PlatformSession platform;
+    if (platform.result != LWS::Result::Success)
+        SKIP("No Wayland compositor is available");
+
+    LWS::Window parent;
+    REQUIRE(parent.Create() == LWS::Result::Success);
+
+    int resizeEvents = 0;
+    LWS::Size resizedTo{};
+    LWS::Window child;
+    child.SetParent(&parent);
+    std::ignore = child.AddEventListener(
+        [&](const LWS::AnyEvent& event)
+        {
+            if (const auto* resize = std::get_if<LWS::EventResize>(&event))
+            {
+                ++resizeEvents;
+                resizedTo = resize->newClientSize;
+            }
+            return true;
+        });
+    REQUIRE(child.Create({.styles = LWS::WindowStyle::ChildWindow}) == LWS::Result::Success);
+
+    child.SetSize({320, 480});
+    REQUIRE(resizeEvents == 1);
+    REQUIRE((resizedTo == LWS::Size{320, 480}));
+
+    child.SetSize({320, 480});
+    REQUIRE(resizeEvents == 1);
+
+    child.SetPlacement({.position = {17, 23}, .size = {400, 500}});
+    REQUIRE((child.GetPosition() == LWS::Point{17, 23}));
+    REQUIRE(resizeEvents == 2);
+    REQUIRE((resizedTo == LWS::Size{400, 500}));
+
+    child.SetPlacement({.position = {17, 23}, .size = {400, 500}});
+    REQUIRE(resizeEvents == 2);
 }
 
 TEST_CASE("Wayland requests the first paint without background erasure", "[wayland][window]")
@@ -409,6 +476,47 @@ TEST_CASE("Wayland requests the first paint without background erasure", "[wayla
     timeout.Enable(false);
 
     REQUIRE(painted);
+}
+
+TEST_CASE("Wayland presents a software bitmap on a child surface", "[wayland][window][bitmap]")
+{
+    PlatformSession platform;
+    if (platform.result != LWS::Result::Success)
+        SKIP("No Wayland compositor is available");
+
+    LWS::Window parent;
+    REQUIRE(parent.Create() == LWS::Result::Success);
+
+    constexpr uint32_t width = 32;
+    constexpr uint32_t height = 24;
+    std::array<std::byte, width * height * 4U> pixels{};
+    bool presented = false;
+    LWS::Window child;
+    child.SetParent(&parent);
+    std::ignore = child.AddEventListener(
+        [&](const LWS::AnyEvent& event)
+        {
+            if (std::holds_alternative<LWS::EventPaint>(event))
+            {
+                presented = child.PresentBitmap({
+                                .pixels = pixels,
+                                .format = LWS::BitmapPixelFormat::Bgra8Premultiplied,
+                                .rowOrder = LWS::BitmapRowOrder::TopDown,
+                                .width = width,
+                                .height = height,
+                                .rowPitch = 0,
+                            }) == LWS::Result::Success;
+            }
+            return true;
+        });
+    const LWS::WindowConfig config{
+        .size = {static_cast<int32_t>(width), static_cast<int32_t>(height)},
+        .styles = LWS::WindowStyle::ChildWindow,
+        .visible = true,
+        .eraseBackground = false,
+    };
+    REQUIRE(child.Create(config) == LWS::Result::Success);
+    REQUIRE(presented);
 }
 
 TEST_CASE("Wayland timers wake the UI loop", "[wayland][timer]")

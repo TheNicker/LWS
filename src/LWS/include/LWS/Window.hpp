@@ -106,6 +106,7 @@ namespace LWS
         [[nodiscard]] EventListenerGuard MakeListenerGuard(EventListenerToken token);
 
         void InjectRawEvent(void* platformEvent);
+        [[nodiscard]] Result PresentBitmap(const BitmapBuffer& bitmap);
 
         [[nodiscard]] BackendId GetBackendId() const;
         [[nodiscard]] Handle GetHandle() const;
