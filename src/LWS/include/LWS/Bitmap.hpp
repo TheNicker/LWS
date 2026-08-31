@@ -1,9 +1,9 @@
 #pragma once
 
 #include <LWS/interfaces/backends.hpp>
+#include <LLUtils/Color.h>
 
 #include <memory>
-#include <span>
 
 namespace LWS
 {
@@ -12,9 +12,9 @@ namespace LWS
 
     class Bitmap
     {
-    public:
+      public:
+
         explicit Bitmap(const BitmapBuffer& bitmapBuffer);
-        explicit Bitmap(const std::filesystem::path& fileName);
         ~Bitmap();
 
         Bitmap(const Bitmap&) = delete;
@@ -22,13 +22,14 @@ namespace LWS
         Bitmap(Bitmap&&) noexcept = delete;
         Bitmap& operator=(Bitmap&&) noexcept = delete;
 
-        [[nodiscard]] BitmapSharedPtr resize(int width, int height, uint8_t background = 0) const;
-        void SaveToFile(const std::filesystem::path& fileName) const;
-        [[nodiscard]] BitmapBuffer GetBitmapHeader() const;
-        [[nodiscard]] Handle GetNativeHandle() const;
+        [[nodiscard]] BitmapSharedPtr resize(int width, int height, LLUtils::Color background = {0, 0, 0, 0}) const;
+        // The returned pixel view remains valid for this immutable bitmap's lifetime.
+        [[nodiscard]] BitmapBuffer GetBuffer() const;
 
-    private:
+      private:
+
         class Impl;
+        explicit Bitmap(std::unique_ptr<Impl> impl);
         std::unique_ptr<Impl> impl_;
     };
-}
+}  // namespace LWS

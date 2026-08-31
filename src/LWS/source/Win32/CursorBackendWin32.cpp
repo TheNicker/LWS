@@ -1,10 +1,12 @@
 #ifdef LWS_PLATFORM_WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <Windows.h>
+    #define WIN32_LEAN_AND_MEAN
+    #include <Windows.h>
 
-#include <cstring>
+    #include <cstring>
+    #include <limits>
 
-#include <LWS/Win32/CursorBackendWin32.hpp>
+    #include <LWS/Win32/CursorBackendWin32.hpp>
+    #include <LWS/source/internal/BitmapValidation.hpp>
 
 namespace
 {
@@ -12,21 +14,33 @@ namespace
     {
         switch (shape)
         {
-        case LWS::CursorShape::Arrow: return LoadCursor(nullptr, IDC_ARROW);
-        case LWS::CursorShape::Hand: return LoadCursor(nullptr, IDC_HAND);
-        case LWS::CursorShape::IBeam: return LoadCursor(nullptr, IDC_IBEAM);
-        case LWS::CursorShape::SizeNS: return LoadCursor(nullptr, IDC_SIZENS);
-        case LWS::CursorShape::SizeEW: return LoadCursor(nullptr, IDC_SIZEWE);
-        case LWS::CursorShape::SizeNWSE: return LoadCursor(nullptr, IDC_SIZENWSE);
-        case LWS::CursorShape::SizeNESW: return LoadCursor(nullptr, IDC_SIZENESW);
-        case LWS::CursorShape::SizeAll: return LoadCursor(nullptr, IDC_SIZEALL);
-        case LWS::CursorShape::No: return LoadCursor(nullptr, IDC_NO);
-        case LWS::CursorShape::Wait: return LoadCursor(nullptr, IDC_WAIT);
-        case LWS::CursorShape::AppStarting: return LoadCursor(nullptr, IDC_APPSTARTING);
-        default: return LoadCursor(nullptr, IDC_ARROW);
+            case LWS::CursorShape::Arrow:
+                return LoadCursor(nullptr, IDC_ARROW);
+            case LWS::CursorShape::Hand:
+                return LoadCursor(nullptr, IDC_HAND);
+            case LWS::CursorShape::IBeam:
+                return LoadCursor(nullptr, IDC_IBEAM);
+            case LWS::CursorShape::SizeNS:
+                return LoadCursor(nullptr, IDC_SIZENS);
+            case LWS::CursorShape::SizeEW:
+                return LoadCursor(nullptr, IDC_SIZEWE);
+            case LWS::CursorShape::SizeNWSE:
+                return LoadCursor(nullptr, IDC_SIZENWSE);
+            case LWS::CursorShape::SizeNESW:
+                return LoadCursor(nullptr, IDC_SIZENESW);
+            case LWS::CursorShape::SizeAll:
+                return LoadCursor(nullptr, IDC_SIZEALL);
+            case LWS::CursorShape::No:
+                return LoadCursor(nullptr, IDC_NO);
+            case LWS::CursorShape::Wait:
+                return LoadCursor(nullptr, IDC_WAIT);
+            case LWS::CursorShape::AppStarting:
+                return LoadCursor(nullptr, IDC_APPSTARTING);
+            default:
+                return LoadCursor(nullptr, IDC_ARROW);
         }
     }
-}
+}  // namespace
 
 namespace LWS
 {
@@ -69,10 +83,17 @@ namespace LWS
 
     void CursorBackendWin32::setCustomCursor(const BitmapBuffer& bmp)
     {
-        if (bmp.bitsPerPixel != 32 || bmp.width == 0 || bmp.height == 0 || bmp.pixels.empty())
+        const auto layout = internal::validateBitmapBuffer(bmp);
+        if (!layout.has_value() ||
+            (bmp.format != BitmapPixelFormat::Bgra8 && bmp.format != BitmapPixelFormat::Bgra8Premultiplied) ||
+            bmp.width > static_cast<uint32_t>(std::numeric_limits<LONG>::max()) ||
+            bmp.height > static_cast<uint32_t>(std::numeric_limits<LONG>::max()))
         {
             return;
         }
+
+        const size_t dest_row_pitch = static_cast<size_t>(bmp.width) * 4U;
+        const size_t source_row_pitch = layout->rowPitch;
 
         BITMAPV5HEADER bitmap_info{};
         bitmap_info.bV5Size = sizeof(bitmap_info);
@@ -88,13 +109,8 @@ namespace LWS
 
         HDC screen_dc = GetDC(nullptr);
         void* pixels = nullptr;
-        HBITMAP color_bitmap = CreateDIBSection(
-            screen_dc,
-            reinterpret_cast<BITMAPINFO*>(&bitmap_info),
-            DIB_RGB_COLORS,
-            &pixels,
-            nullptr,
-            0);
+        HBITMAP color_bitmap = CreateDIBSection(screen_dc, reinterpret_cast<BITMAPINFO*>(&bitmap_info), DIB_RGB_COLORS,
+                                                &pixels, nullptr, 0);
         ReleaseDC(nullptr, screen_dc);
 
         if (color_bitmap == nullptr || pixels == nullptr)
@@ -106,13 +122,33 @@ namespace LWS
             return;
         }
 
-        const size_t source_row_pitch = bmp.rowPitch != 0 ? bmp.rowPitch : static_cast<size_t>(bmp.width) * 4U;
-        const size_t dest_row_pitch = static_cast<size_t>(bmp.width) * 4U;
         const std::byte* source = bmp.pixels.data();
         std::byte* destination = static_cast<std::byte*>(pixels);
         for (uint32_t row = 0; row < bmp.height; ++row)
         {
-            std::memcpy(destination + static_cast<size_t>(row) * dest_row_pitch, source + static_cast<size_t>(row) * source_row_pitch, dest_row_pitch);
+            const uint32_t source_row = bmp.rowOrder == BitmapRowOrder::TopDown ? row : bmp.height - row - 1;
+            const std::byte* source_row_pixels = source + static_cast<size_t>(source_row) * source_row_pitch;
+            std::byte* destination_row_pixels = destination + static_cast<size_t>(row) * dest_row_pitch;
+            if (bmp.format == BitmapPixelFormat::Bgra8Premultiplied)
+            {
+                std::memcpy(destination_row_pixels, source_row_pixels, dest_row_pitch);
+            }
+            else
+            {
+                const auto* source_channels = reinterpret_cast<const uint8_t*>(source_row_pixels);
+                auto* destination_channels = reinterpret_cast<uint8_t*>(destination_row_pixels);
+                for (uint32_t column = 0; column < bmp.width; ++column)
+                {
+                    const size_t offset = static_cast<size_t>(column) * 4U;
+                    const uint8_t alpha = source_channels[offset + 3];
+                    for (size_t channel = 0; channel < 3; ++channel)
+                    {
+                        destination_channels[offset + channel] = static_cast<uint8_t>(
+                            (static_cast<uint16_t>(source_channels[offset + channel]) * alpha + 127U) / 255U);
+                    }
+                    destination_channels[offset + 3] = alpha;
+                }
+            }
         }
 
         HBITMAP mask_bitmap = CreateBitmap(static_cast<int>(bmp.width), static_cast<int>(bmp.height), 1, 1, nullptr);
@@ -166,5 +202,5 @@ namespace LWS
 
         return LoadCursor(nullptr, IDC_ARROW);
     }
-}
+}  // namespace LWS
 #endif

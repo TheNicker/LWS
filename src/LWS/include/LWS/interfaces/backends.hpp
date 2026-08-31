@@ -22,6 +22,19 @@ namespace LWS
     using Rect = LLUtils::RectI32;
     using Handle = uintptr_t;
 
+    enum class BitmapPixelFormat
+    {
+        Bgr8,
+        Bgra8,
+        Bgra8Premultiplied
+    };
+
+    enum class BitmapRowOrder
+    {
+        TopDown,
+        BottomUp
+    };
+
     enum class BackendId
     {
         Undefined,
@@ -86,7 +99,8 @@ namespace LWS
     struct BitmapBuffer
     {
         std::span<const std::byte> pixels;
-        uint8_t bitsPerPixel = 32;
+        BitmapPixelFormat format = BitmapPixelFormat::Bgra8Premultiplied;
+        BitmapRowOrder rowOrder = BitmapRowOrder::TopDown;
         uint32_t width = 0;
         uint32_t height = 0;
         uint32_t rowPitch = 0;

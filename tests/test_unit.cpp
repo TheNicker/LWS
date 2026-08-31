@@ -1,6 +1,7 @@
 // Unit tests for LWS types that don't require a real window or platform init.
 #include <catch2/catch_test_macros.hpp>
 
+#include <LWS/Bitmap.hpp>
 #include <LWS/Event.hpp>
 #include <LWS/Cursor.hpp>
 #include <LWS/KeyCode.hpp>
@@ -10,7 +11,10 @@
 #include <LWS/Window.hpp>
 #include <LWS/WindowDisplayState.hpp>
 #include <LWS/interfaces/backends.hpp>
+#include <LLUtils/Exception.h>
 
+#include <array>
+#include <cstddef>
 #include <type_traits>
 #include <utility>
 
@@ -198,8 +202,90 @@ TEST_CASE("BitmapBuffer defaults are zeroed", "[bitmap]")
     LWS::BitmapBuffer buf;
     REQUIRE(buf.width == 0);
     REQUIRE(buf.height == 0);
-    REQUIRE(buf.bitsPerPixel == 32);
+    REQUIRE(buf.format == LWS::BitmapPixelFormat::Bgra8Premultiplied);
+    REQUIRE(buf.rowOrder == LWS::BitmapRowOrder::TopDown);
     REQUIRE(buf.pixels.empty());
+}
+
+TEST_CASE("Bitmap rejects a pixel span smaller than its declared layout", "[bitmap]")
+{
+    const std::array<std::byte, 4> pixels{};
+    REQUIRE_THROWS_AS(LWS::Bitmap({
+                          .pixels = pixels,
+                          .format = LWS::BitmapPixelFormat::Bgra8,
+                          .width = 2,
+                          .height = 2,
+                          .rowPitch = 8,
+                      }),
+                      LLUtils::Exception);
+}
+
+TEST_CASE("Bitmap normalizes bottom-up straight alpha pixels", "[bitmap]")
+{
+    const std::array pixels{
+        std::byte{0},   std::byte{0}, std::byte{255}, std::byte{128},
+        std::byte{255}, std::byte{0}, std::byte{0},   std::byte{255},
+    };
+    const LWS::Bitmap bitmap({
+        .pixels = pixels,
+        .format = LWS::BitmapPixelFormat::Bgra8,
+        .rowOrder = LWS::BitmapRowOrder::BottomUp,
+        .width = 1,
+        .height = 2,
+        .rowPitch = 4,
+    });
+
+    const auto normalized = bitmap.GetBuffer();
+    REQUIRE(normalized.format == LWS::BitmapPixelFormat::Bgra8Premultiplied);
+    REQUIRE(normalized.rowOrder == LWS::BitmapRowOrder::TopDown);
+    REQUIRE(normalized.pixels[0] == std::byte{255});
+    REQUIRE(normalized.pixels[6] == std::byte{128});
+}
+
+TEST_CASE("Bitmap resize preserves aspect ratio and centers content", "[bitmap]")
+{
+    std::array<std::byte, 4U * 2U * 4U> pixels{};
+    for (size_t offset = 0; offset < pixels.size(); offset += 4U)
+    {
+        pixels[offset + 2] = std::byte{255};
+        pixels[offset + 3] = std::byte{255};
+    }
+    const LWS::Bitmap bitmap({
+        .pixels = pixels,
+        .format = LWS::BitmapPixelFormat::Bgra8Premultiplied,
+        .rowOrder = LWS::BitmapRowOrder::TopDown,
+        .width = 4,
+        .height = 2,
+        .rowPitch = 16,
+    });
+
+    const auto resizedBitmap = bitmap.resize(4, 4, {255, 255, 255, 255});
+    const auto resized = resizedBitmap->GetBuffer();
+    REQUIRE(resized.pixels[0] == std::byte{255});
+    REQUIRE(resized.pixels[1] == std::byte{255});
+    REQUIRE(resized.pixels[2] == std::byte{255});
+    REQUIRE(resized.pixels[static_cast<size_t>(resized.rowPitch) + 2] == std::byte{255});
+    REQUIRE(resized.pixels[static_cast<size_t>(resized.rowPitch) + 1] == std::byte{0});
+}
+
+TEST_CASE("Bitmap resize composites transparency over its background", "[bitmap]")
+{
+    const std::array pixels{std::byte{0}, std::byte{0}, std::byte{255}, std::byte{128}};
+    const LWS::Bitmap bitmap({
+        .pixels = pixels,
+        .format = LWS::BitmapPixelFormat::Bgra8,
+        .rowOrder = LWS::BitmapRowOrder::TopDown,
+        .width = 1,
+        .height = 1,
+        .rowPitch = 4,
+    });
+
+    const auto resizedBitmap = bitmap.resize(1, 1, {255, 255, 255, 255});
+    const auto resized = resizedBitmap->GetBuffer();
+    REQUIRE(resized.pixels[0] == std::byte{127});
+    REQUIRE(resized.pixels[1] == std::byte{127});
+    REQUIRE(resized.pixels[2] == std::byte{255});
+    REQUIRE(resized.pixels[3] == std::byte{255});
 }
 
 TEST_CASE("Notification icon rectangles use signed screen coordinates", "[notification-icon]")

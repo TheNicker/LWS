@@ -1,5 +1,4 @@
 #ifdef LWS_PLATFORM_X11
-    #include <LWS/Bitmap.hpp>
     #include <LWS/Clipboard.hpp>
     #include <LWS/FileDialog.hpp>
     #include <LWS/NotificationIconGroup.hpp>
@@ -7,29 +6,9 @@
 
 namespace LWS
 {
-    class Bitmap::Impl
-    {
-    };
     class NotificationIconGroup::Impl
     {
     };
-
-    Bitmap::Bitmap(const BitmapBuffer&) {}
-    Bitmap::Bitmap(const std::filesystem::path&) {}
-    Bitmap::~Bitmap() = default;
-    BitmapSharedPtr Bitmap::resize(int, int, uint8_t) const
-    {
-        return {};
-    }
-    void Bitmap::SaveToFile(const std::filesystem::path&) const {}
-    BitmapBuffer Bitmap::GetBitmapHeader() const
-    {
-        return {};
-    }
-    Handle Bitmap::GetNativeHandle() const
-    {
-        return 0;
-    }
 
     void Clipboard::RegisterFormat(ClipboardFormatType format)
     {

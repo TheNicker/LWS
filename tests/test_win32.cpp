@@ -535,20 +535,6 @@ TEST_CASE("processMessages returns false when no WM_QUIT is pending", "[platform
     LWS::Platform::shutdown();
 }
 
-TEST_CASE("Bitmap rejects a pixel span smaller than its declared layout", "[bitmap][win32]")
-{
-    const std::array<std::byte, 4> pixels{};
-    const LWS::BitmapBuffer buffer{
-        .pixels = pixels,
-        .bitsPerPixel = 32,
-        .width = 2,
-        .height = 2,
-        .rowPitch = 8,
-    };
-
-    REQUIRE_THROWS_AS(LWS::Bitmap(buffer), LLUtils::Exception);
-}
-
 TEST_CASE("Clipboard rejects writes without an owner window", "[clipboard][win32]")
 {
     const std::array data{ std::byte{} };
