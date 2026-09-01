@@ -206,7 +206,6 @@ if(LWS_BUILD_TESTS)
     lws_configure_target(LWSTests)
     if(MSVC)
       target_link_options(LWSTests PRIVATE /SUBSYSTEM:CONSOLE)
-      target_link_options(LWSTests PRIVATE /ENTRY:wmainCRTStartup)
     endif()
 
     include(CTest)
