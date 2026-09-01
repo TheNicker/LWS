@@ -35,6 +35,7 @@ namespace LWS
         BottomUp
     };
 
+    // Built-in IDs are concrete backend discriminators. Custom backends must use Undefined rather than claim one.
     enum class BackendId
     {
         Undefined,

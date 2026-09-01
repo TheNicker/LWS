@@ -6,6 +6,7 @@
 #include <map>
 
 #include <LWS/interfaces/backends.hpp>
+#include <LWS/Win32/EventWin32.hpp>
 
 namespace LWS::internal
 {
@@ -75,8 +76,8 @@ namespace LWS
         Handle getHandle() const override;
         BackendId backend() const override;
 
+        void setPlatformCallback(Win32::PlatformCallback callback);
         void setMenuChar(bool suppress);
-        bool getMenuChar() const;
 
     private:
         static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam);
@@ -89,6 +90,7 @@ namespace LWS
         void setFullScreen(bool multiMonitor);
         LRESULT getCorner(POINTS points) const;
         void dispatchEvent(const AnyEvent& event_data);
+        [[nodiscard]] bool dispatchPlatformEvent(const Win32::PlatformEvent& event, LRESULT& result);
 
         HWND fHwnd = nullptr;
         bool fSuppressMenuChar = false;
@@ -113,6 +115,7 @@ namespace LWS
         std::shared_ptr<internal::DragAndDropTarget> fDragAndDrop;
         uint64_t fNextToken = 1;
         std::map<EventListenerToken, EventCallback> fListeners;
+        Win32::PlatformCallback fPlatformCallback;
     };
 }
 #endif  // LWS_PLATFORM_WIN32

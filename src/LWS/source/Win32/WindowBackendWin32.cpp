@@ -7,6 +7,7 @@
     #include <LWS/StringDefs.hpp>
 
     #include <mutex>
+    #include <optional>
     #include <stdexcept>
     #include <utility>
     #include <vector>
@@ -860,14 +861,14 @@ namespace LWS
         return BackendId::Win32;
     }
 
+    void WindowBackendWin32::setPlatformCallback(Win32::PlatformCallback callback)
+    {
+        fPlatformCallback = std::move(callback);
+    }
+
     void WindowBackendWin32::setMenuChar(bool suppress)
     {
         fSuppressMenuChar = suppress;
-    }
-
-    bool WindowBackendWin32::getMenuChar() const
-    {
-        return fSuppressMenuChar;
     }
 
     LRESULT CALLBACK WindowBackendWin32::WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
@@ -946,6 +947,12 @@ namespace LWS
 
             case WM_KEYDOWN:
             {
+                if (dispatchPlatformEvent(Win32::KeyEvent{static_cast<uint32_t>(wParam), static_cast<uint32_t>(lParam),
+                                                          true},
+                                          return_value))
+                {
+                    use_default = false;
+                }
                 bool repeat = (lParam & (1LL << 30)) != 0;
                 dispatchEvent(EventKeyDown{keyCodeFromVirtualKey(wParam, lParam), repeat});
                 break;
@@ -953,8 +960,43 @@ namespace LWS
 
             case WM_SYSKEYUP:
             case WM_KEYUP:
+                if (dispatchPlatformEvent(Win32::KeyEvent{static_cast<uint32_t>(wParam), static_cast<uint32_t>(lParam),
+                                                          false},
+                                          return_value))
+                {
+                    use_default = false;
+                }
                 dispatchEvent(EventKeyUp{keyCodeFromVirtualKey(wParam, lParam)});
                 break;
+
+            case WM_VSCROLL:
+            {
+                std::optional<Win32::VerticalScrollAction> action;
+                switch (LOWORD(wParam))
+                {
+                    case SB_PAGEUP:
+                        action = Win32::VerticalScrollAction::PageUp;
+                        break;
+                    case SB_PAGEDOWN:
+                        action = Win32::VerticalScrollAction::PageDown;
+                        break;
+                    case SB_THUMBPOSITION:
+                        action = Win32::VerticalScrollAction::ThumbPosition;
+                        break;
+                    case SB_THUMBTRACK:
+                        action = Win32::VerticalScrollAction::ThumbTrack;
+                        break;
+                    default:
+                        break;
+                }
+                if (action &&
+                    dispatchPlatformEvent(Win32::VerticalScrollEvent{*action, static_cast<int32_t>(HIWORD(wParam))},
+                                          return_value))
+                {
+                    use_default = false;
+                }
+                break;
+            }
 
             case WM_ERASEBKGND:
                 use_default = false;
@@ -1027,6 +1069,13 @@ namespace LWS
                 dispatchEvent(EventFocusLost{});
                 break;
 
+            case WM_ACTIVATE:
+                if (dispatchPlatformEvent(Win32::ActivationEvent{LOWORD(wParam) != WA_INACTIVE}, return_value))
+                {
+                    use_default = false;
+                }
+                break;
+
             case WM_MOUSEMOVE:
             {
                 Point position{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
@@ -1077,11 +1126,44 @@ namespace LWS
             {
                 PAINTSTRUCT paint_struct{};
                 BeginPaint(hWnd, &paint_struct);
-                EndPaint(hWnd, &paint_struct);
                 use_default = false;
+                std::ignore = dispatchPlatformEvent(
+                    Win32::PaintEvent{paint_struct.hdc,
+                                      {{paint_struct.rcPaint.left, paint_struct.rcPaint.top},
+                                       {paint_struct.rcPaint.right, paint_struct.rcPaint.bottom}}},
+                    return_value);
+                EndPaint(hWnd, &paint_struct);
                 dispatchEvent(EventPaint{});
                 break;
             }
+
+            case WM_COPYDATA:
+            {
+                const auto* copy_data = reinterpret_cast<const COPYDATASTRUCT*>(lParam);
+                if (copy_data != nullptr)
+                {
+                    std::span<const std::byte> data;
+                    if (copy_data->lpData != nullptr && copy_data->cbData > 0)
+                    {
+                        data = {static_cast<const std::byte*>(copy_data->lpData), copy_data->cbData};
+                    }
+                    if (dispatchPlatformEvent(Win32::CopyDataEvent{copy_data->dwData, data}, return_value))
+                    {
+                        use_default = false;
+                    }
+                }
+                break;
+            }
+
+            case Win32::NotificationIconEvent::MessageId:
+                if (dispatchPlatformEvent(Win32::NotificationIconEvent{LOWORD(lParam),
+                                                                       static_cast<int16_t>(GET_X_LPARAM(wParam)),
+                                                                       static_cast<int16_t>(GET_Y_LPARAM(wParam))},
+                                          return_value))
+                {
+                    use_default = false;
+                }
+                break;
 
             case WM_SHOWWINDOW:
                 fVisible = wParam != 0;
@@ -1118,10 +1200,6 @@ namespace LWS
             default:
                 break;
         }
-
-        Win32::WinMessage raw_message{reinterpret_cast<uintptr_t>(hWnd), message, static_cast<uintptr_t>(wParam),
-                                      static_cast<uintptr_t>(lParam)};
-        dispatchEvent(EventRawPlatform{std::to_underlying(BackendId::Win32), &raw_message});
 
         return use_default ? DefWindowProc(hWnd, message, wParam, lParam) : return_value;
     }
@@ -1275,6 +1353,23 @@ namespace LWS
                 break;
             }
         }
+    }
+
+    bool WindowBackendWin32::dispatchPlatformEvent(const Win32::PlatformEvent& event, LRESULT& result)
+    {
+        if (!fPlatformCallback)
+        {
+            return false;
+        }
+
+        const std::optional<LRESULT> callback_result = fPlatformCallback(event);
+        if (!callback_result)
+        {
+            return false;
+        }
+
+        result = *callback_result;
+        return true;
     }
 }  // namespace LWS
 #endif  // LWS_PLATFORM_WIN32

@@ -13,6 +13,11 @@
 
 namespace LWS
 {
+    namespace internal
+    {
+        class WindowBackendAccess;
+    }
+
     LLUTILS_DEFINE_ENUM_CLASS_FLAG_OPERATIONS(WindowStyle)
     using WindowStyleFlags = LLUtils::BitFlags<WindowStyle>;
 
@@ -121,6 +126,8 @@ namespace LWS
         std::unique_ptr<IWindowBackend> impl_;
 
     private:
+        friend class internal::WindowBackendAccess;
+
         Window* fParent = nullptr;
         VecChildWindows fChildren;
         Cursor* fMouseCursor = nullptr;
@@ -131,3 +138,7 @@ namespace LWS
         void NotifyRemovedFromRelatedWindows();
     };
 }
+
+#ifdef LWS_PLATFORM_WIN32
+#include <LWS/Win32/WindowExtensions.hpp>
+#endif

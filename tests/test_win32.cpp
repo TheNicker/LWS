@@ -397,6 +397,90 @@ TEST_CASE("AddEventListener returns distinct tokens", "[window][event][win32]")
     LWS::Platform::shutdown();
 }
 
+TEST_CASE("Win32 window stores one scoped platform paint callback", "[window][event][win32]")
+{
+    LWS::Platform::init();
+    {
+        LWS::Window window;
+        REQUIRE(window.Create(makeTestConfig()) == LWS::Result::Success);
+        REQUIRE(LWS::Win32::SetMenuChar(window, false) == LWS::Result::Success);
+
+        int replacedCallbackCount = 0;
+        int paintCount = 0;
+        std::optional<bool> active;
+        int platformPaintSerial = 0;
+        int semanticPaintSerial = 0;
+        const auto listener = window.AddEventListener(
+            [&](const LWS::AnyEvent& event)
+            {
+                if (std::holds_alternative<LWS::EventPaint>(event))
+                {
+                    REQUIRE(semanticPaintSerial + 1 == platformPaintSerial);
+                    ++semanticPaintSerial;
+                }
+                return false;
+            });
+        REQUIRE(LWS::Win32::SetPlatformCallback(window,
+                                                [&](const LWS::Win32::PlatformEvent&) -> std::optional<LRESULT>
+                                                {
+                                                    ++replacedCallbackCount;
+                                                    return 0;
+                                                }) == LWS::Result::Success);
+        REQUIRE(LWS::Win32::SetPlatformCallback(
+                    window,
+                    [&](const LWS::Win32::PlatformEvent& event) -> std::optional<LRESULT>
+                    {
+                        if (const auto* paint = std::get_if<LWS::Win32::PaintEvent>(&event))
+                        {
+                            REQUIRE(platformPaintSerial == semanticPaintSerial);
+                            ++platformPaintSerial;
+                            REQUIRE(paint->deviceContext != nullptr);
+                            REQUIRE(GetObjectType(paint->deviceContext) == OBJ_DC);
+                            REQUIRE(paint->invalidRect.GetWidth() > 0);
+                            REQUIRE(paint->invalidRect.GetHeight() > 0);
+                            ++paintCount;
+                            return 0;
+                        }
+                        if (const auto* activation = std::get_if<LWS::Win32::ActivationEvent>(&event))
+                        {
+                            active = activation->active;
+                        }
+                        return std::nullopt;
+                    }) == LWS::Result::Success);
+
+        const HWND handle = reinterpret_cast<HWND>(window.GetHandle());
+        window.SetVisible(true);
+        pumpMessages();
+        paintCount = 0;
+        const int previousSemanticPaintSerial = semanticPaintSerial;
+        InvalidateRect(handle, nullptr, TRUE);
+        UpdateWindow(handle);
+        REQUIRE(replacedCallbackCount == 0);
+        REQUIRE(paintCount == 1);
+        REQUIRE(semanticPaintSerial == previousSemanticPaintSerial + 1);
+
+        SendMessage(handle, WM_ACTIVATE, WA_INACTIVE, 0);
+        REQUIRE(active == false);
+        SendMessage(handle, WM_ACTIVATE, WA_ACTIVE, 0);
+        REQUIRE(active == true);
+
+        window.RemoveEventListener(listener);
+        REQUIRE(LWS::Win32::SetPlatformCallback(window, {}) == LWS::Result::Success);
+        InvalidateRect(handle, nullptr, TRUE);
+        UpdateWindow(handle);
+        REQUIRE(paintCount == 1);
+    }
+    LWS::Platform::shutdown();
+}
+
+TEST_CASE("Win32 extensions reject a window without a backend", "[window][event][win32]")
+{
+    LWS::Window window(std::unique_ptr<LWS::IWindowBackend>{});
+
+    REQUIRE(LWS::Win32::SetPlatformCallback(window, {}) == LWS::Result::NotSupported);
+    REQUIRE(LWS::Win32::SetMenuChar(window, false) == LWS::Result::NotSupported);
+}
+
 // ---------------------------------------------------------------------------
 // EventListenerGuard RAII auto-remove
 // ---------------------------------------------------------------------------

@@ -21,8 +21,6 @@ namespace LWS
     {
       public:
 
-        static constexpr UINT WM_PRIVATE_NOTIFICATION_CALLBACK_MESSAGE_ID = WM_USER + 1;
-
         Impl() = default;
 
         ~Impl()
@@ -47,8 +45,21 @@ namespace LWS
             {
                 std::ignore = fWindow.Create({.visible = false});
                 fWindow.SetVisible(false);
-                fWindow.AddEventListener([this, &notificationEvent](const AnyEvent& eventData)
-                                         { return OnWindowMessage(eventData, notificationEvent); });
+                if (Win32::SetPlatformCallback(
+                        fWindow,
+                        [this, &notificationEvent](const Win32::PlatformEvent& event)
+                        {
+                            if (const auto* notification = std::get_if<Win32::NotificationIconEvent>(&event))
+                            {
+                                HandleMessage(*notification, notificationEvent);
+                                return std::optional<LRESULT>{0};
+                            }
+                            return std::optional<LRESULT>{};
+                        }) != Result::Success)
+                {
+                    LL_EXCEPTION(LLUtils::Exception::ErrorCode::InvalidState,
+                                 "Unable to register the notification-icon platform callback");
+                }
             }
 
             NOTIFYICONDATA nid{};
@@ -58,7 +69,7 @@ namespace LWS
             nid.uFlags = NIF_ICON | NIF_TIP | NIF_MESSAGE | NIF_SHOWTIP;
             IconID iconId = fIconIdProvider.Acquire();
             nid.uID = static_cast<UINT>(iconId);
-            nid.uCallbackMessage = WM_PRIVATE_NOTIFICATION_CALLBACK_MESSAGE_ID;
+            nid.uCallbackMessage = Win32::NotificationIconEvent::MessageId;
 
             LLUtils::StringUtility::StrCpy(nid.szTip, tooltip.c_str(), LLUtils::array_length(nid.szTip));
             nid.hIcon = LoadIcon(GetModuleHandle(nullptr), MAKEINTRESOURCE(iconResourceId));
@@ -99,38 +110,17 @@ namespace LWS
 
       private:
 
-        bool OnWindowMessage(const AnyEvent& eventData, NotificationIconEvent& notificationEvent)
+        void HandleMessage(const Win32::NotificationIconEvent& message, NotificationIconEvent& notificationEvent)
         {
-            const auto* raw = std::get_if<EventRawPlatform>(&eventData);
-            if (raw == nullptr || raw->platformType != std::to_underlying(BackendId::Win32) ||
-                raw->platformData == nullptr)
-            {
-                return false;
-            }
-
-            const auto& message = *reinterpret_cast<const Win32::WinMessage*>(raw->platformData);
-            if (message.message == WM_PRIVATE_NOTIFICATION_CALLBACK_MESSAGE_ID)
-            {
-                HandleMessage(message, notificationEvent);
-                return true;
-            }
-
-            return false;
-        }
-
-        void HandleMessage(const Win32::WinMessage& message, NotificationIconEvent& notificationEvent)
-        {
-            UINT notificationMessage = LOWORD(message.lParam);
-            int16_t x = static_cast<int16_t>(GET_X_LPARAM(message.wParam));
-            int16_t y = static_cast<int16_t>(GET_Y_LPARAM(message.wParam));
-
-            switch (notificationMessage)
+            switch (message.notification)
             {
                 case NIN_SELECT:
-                    notificationEvent.Raise(NotificationIconEventArgs{NotificationIconAction::Select, x, y});
+                    notificationEvent.Raise(
+                        NotificationIconEventArgs{NotificationIconAction::Select, message.x, message.y});
                     break;
                 case WM_CONTEXTMENU:
-                    notificationEvent.Raise(NotificationIconEventArgs{NotificationIconAction::ContextMenu, x, y});
+                    notificationEvent.Raise(
+                        NotificationIconEventArgs{NotificationIconAction::ContextMenu, message.x, message.y});
                     break;
                 default:
                     break;
