@@ -118,13 +118,14 @@ function(lws_configure_target target)
 
   if(LWS_PLATFORM_WIN32)
     target_compile_definitions(${target} PUBLIC LWS_PLATFORM_WIN32)
+    # Keep library names lowercase for case-sensitive MinGW builds on Linux.
     target_link_libraries(${target} PRIVATE
-        Ole32
-        Shell32
-        Shcore
-        User32
-        Gdi32
-        ComCtl32
+        ole32
+        shell32
+        shcore
+        user32
+        gdi32
+        comctl32
     )
   elseif(LWS_PLATFORM_WAYLAND)
     target_compile_definitions(${target} PUBLIC LWS_PLATFORM_WAYLAND)
